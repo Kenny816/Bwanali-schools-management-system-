@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bwanali Login</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="login-bg">
+  <div class="login-card">
+    <div class="login-header">
+      <h1>BWANALI</h1>
+      <p>School Management System</p>
+    </div>
+    <form id="loginForm">
+      <div class="input-group"><label>Email</label><input type="email" id="email" placeholder="admin@school.com" required autofocus></div>
+      <div class="input-group"><label>Password</label><input type="password" id="password" placeholder="Password" required></div>
+      <button type="submit" class="btn-primary">Sign In</button>
+      <div id="error-message" class="error-msg"></div>
+    </form>
+    <div class="school-badge" id="schoolName"></div>
+  </div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const tenant = params.get('tenant') || 'demo';
+    document.getElementById('schoolName').innerText = `School: ${tenant}`;
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      const errorEl = document.getElementById('error-message');
+      errorEl.innerText = '';
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        const data = await res.json();
+        if (data.success) {
+          sessionStorage.setItem('bwanali_token', data.token);
+          sessionStorage.setItem('bwanali_tenant', tenant);
+          window.location.href = `/dashboard.html?tenant=${tenant}`;
+        } else {
+          errorEl.innerText = data.message || 'Login failed';
+        }
+      } catch (err) {
+        errorEl.innerText = 'Network error. Is the server running?';
+      }
+    });
+  </script>
+</body>
+</html>
