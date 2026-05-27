@@ -1,0 +1,7 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Deputy Head – Bwanali</title><link rel="stylesheet" href="/style.css"></head><body data-page="deputy"><script src="/shared.js"></script><script>
+document.addEventListener("DOMContentLoaded",async function(){
+  var res = await fetch("/api/staff?tenant="+(new URLSearchParams(window.location.search).get("tenant")||"demo"));
+  var staff = await res.json();
+  document.getElementById("page-content").innerHTML = '<div class="module-header"><h2>👔 Deputy Headteacher Dashboard</h2></div><div class="stats-grid"><div class="stat-card"><h3>Staff Count</h3><div class="value">'+staff.length+'</div></div></div>';
+});
+</script></body></html>

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard – Bwanali</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    /* Responsive grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 15px;
+      margin-bottom: 25px;
+    }
+    .stat-card {
+      background: #fff;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+      text-align: center;
+    }
+    .stat-label {
+      font-size: 13px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .stat-value {
+      font-size: 28px;
+      font-weight: bold;
+      color: #1e3c72;
+      margin-top: 5px;
+      display: block;
+    }
+
+    /* Committee/club cards */
+    .committee-card {
+      background: #fff;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+      margin-bottom: 10px;
+    }
+    .committee-card strong {
+      color: #1e3c72;
+    }
+
+    /* Loading & error */
+    .loading-placeholder {
+      text-align: center;
+      padding: 20px;
+      color: #888;
+    }
+    .error-message {
+      background: #fff3cd;
+      padding: 15px;
+      border-radius: 8px;
+      color: #856404;
+      margin-bottom: 15px;
+    }
+
+    @media (max-width: 600px) {
+      .stats-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      .stat-card {
+        padding: 12px;
+      }
+      .stat-value {
+        font-size: 22px;
+      }
+    }
+  </style>
+</head>
+<body data-page="dashboard">
+  <script src="/shared.js"></script>
+  <script>
+    (function() {
+      var params = new URLSearchParams(window.location.search);
+      var tenant = params.get('tenant') || 'demo';
+      var schoolType = sessionStorage.getItem('school_type') || 'private';
+      var token = sessionStorage.getItem('bwanali_token');
+
+      // Helper: show error in a section
+      function showError(containerId, message) {
+        var el = document.getElementById(containerId);
+        if (el) el.innerHTML = '<div class="error-message">' + message + '</div>';
+      }
+
+      // Helper: show loading spinner in a section
+      function showLoading(containerId) {
+        var el = document.getElementById(containerId);
+        if (el) el.innerHTML = '<div class="loading-placeholder">Loading...</div>';
+      }
+
+      async function loadDashboard() {
+        var content = document.getElementById('page-content');
+
+        // ======== BUILD STAT CARDS ========
+        var statsHtml = '<div class="stats-grid">' +
+          '<div class="stat-card"><span class="stat-label">Students</span><span class="stat-value" id="statStudents">-</span></div>' +
+          '<div class="stat-card"><span class="stat-label">Staff</span><span class="stat-value" id="statStaff">-</span></div>' +
+          '<div class="stat-card"><span class="stat-label">Attendance</span><span class="stat-value" id="statAttendance">-</span></div>';
+
+        if (schoolType !== 'government-no-fees') {
+          statsHtml += '<div class="stat-card"><span class="stat-label">Fees Collected</span><span class="stat-value" id="statFees">-</span></div>';
+        }
+        statsHtml += '</div>';
+
+        // ======== FOR NO‑FEE SCHOOLS: ADD COMMITTEES & CLUBS SECTIONS ========
+        if (schoolType === 'government-no-fees') {
+          statsHtml += '<h3>📋 Committees</h3><div id="committeesContainer"></div>';
+          statsHtml += '<h3 style="margin-top:20px;">🏅 Clubs</h3><div id="clubsContainer"></div>';
+        }
+
+        content.innerHTML = statsHtml;
+
+        // ======== LOAD STATS ========
+        if (!token) {
+          showError('statStudents', 'Please log in to view stats.');
+          return;
+        }
+
+        try {
+          var dashRes = await fetch('/api/dashboard?tenant=' + tenant, {
+            headers: { 'Authorization': 'Bearer ' + token }
+          });
+          if (!dashRes.ok) throw new Error('Failed to load stats');
+
+          var dashData = await dashRes.json();
+          document.getElementById('statStudents').textContent = dashData.stats.students || 0;
+          document.getElementById('statStaff').textContent = dashData.stats.staff || 0;
+          document.getElementById('statAttendance').textContent = dashData.stats.attendance || '85%';
+          if (schoolType !== 'government-no-fees') {
+            document.getElementById('statFees').textContent = dashData.stats.feesCollected || 'ZMW 0.00';
+          }
+        } catch (err) {
+          showError('statStudents', 'Could not load stats. Please refresh.');
+        }
+
+        // ======== LOAD COMMITTEES & CLUBS ========
+        if (schoolType === 'government-no-fees') {
+          showLoading('committeesContainer');
+          showLoading('clubsContainer');
+
+          try {
+            var comRes = await fetch('/api/committees?tenant=' + tenant, {
+              headers: { 'Authorization': 'Bearer ' + token }
+            });
+            if (!comRes.ok) throw new Error('Failed to load committees');
+
+            var coms = await comRes.json();
+            var clubs = coms.filter(function(c) { return c.name.toLowerCase().indexOf('club') !== -1; });
+            var pureCommittees = coms.filter(function(c) { return c.name.toLowerCase().indexOf('club') === -1; });
+
+            // Render committees
+            var comHtml = '';
+            if (pureCommittees.length) {
+              pureCommittees.forEach(function(c) {
+                var chairPos = (c.positions || []).find(function(p) { return p.position === 'Chairperson'; });
+                var vicePos = (c.positions || []).find(function(p) { return p.position === 'Vice Chairperson'; });
+                var secPos = (c.positions || []).find(function(p) { return p.position === 'Secretary'; });
+                var totalMembers = (c.members || []).length + (c.positions || []).filter(function(p) { return p.staff_id; }).length;
+                comHtml += '<div class="committee-card"><strong>' + c.name + '</strong> (' + totalMembers + ' members)<br>' +
+                  'Chair: ' + (chairPos && chairPos.staff_id ? 'Assigned' : 'Vacant') +
+                  ' | Vice Chair: ' + (vicePos && vicePos.staff_id ? 'Assigned' : 'Vacant') +
+                  ' | Secretary: ' + (secPos && secPos.staff_id ? 'Assigned' : 'Vacant') + '</div>';
+              });
+            } else {
+              comHtml = '<p>No committees defined yet.</p>';
+            }
+            document.getElementById('committeesContainer').innerHTML = comHtml;
+
+            // Render clubs
+            var clubHtml = '';
+            if (clubs.length) {
+              clubs.forEach(function(c) {
+                var chairPos = (c.positions || []).find(function(p) { return p.position === 'Chairperson'; });
+                var totalMembers = (c.members || []).length + (c.positions || []).filter(function(p) { return p.staff_id; }).length;
+                clubHtml += '<div class="committee-card"><strong>' + c.name + '</strong> (' + totalMembers + ' members)<br>' +
+                  'Chair: ' + (chairPos && chairPos.staff_id ? 'Assigned' : 'Vacant') + '</div>';
+              });
+            } else {
+              clubHtml = '<p>No clubs defined yet.</p>';
+            }
+            document.getElementById('clubsContainer').innerHTML = clubHtml;
+
+          } catch (err) {
+            showError('committeesContainer', 'Could not load committees.');
+            showError('clubsContainer', 'Could not load clubs.');
+          }
+        }
+      }
+
+      document.addEventListener('DOMContentLoaded', loadDashboard);
+    })();
+  </script>
+</body>
+</html>

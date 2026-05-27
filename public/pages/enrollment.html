@@ -1,0 +1,356 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Enrollment – Bwanali</title><link rel="stylesheet" href="/style.css"></head><body data-page="enrollment"><script src="/shared.js"></script><script>
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var tenant = params.get("tenant") || "demo";
+  var students = [];
+  var tenantInfo = {};
+  var token = sessionStorage.getItem("bwanali_token");
+
+  // ========== SIMPLE HELPERS ==========
+  function showLoading() {
+    var tbody = document.querySelector("#studentsTable tbody");
+    if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="text-muted">Loading students…</td></tr>';
+  }
+
+  function showError(message) {
+    var tbody = document.querySelector("#studentsTable tbody");
+    if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="text-muted" style="color:red;">' + message + '</td></tr>';
+    window.showNotification && window.showNotification(message, "error");
+  }
+
+  // ========== LOAD TENANT INFO ==========
+  async function loadTenantInfo() {
+    try {
+      var r = await fetch("/api/tenant?tenant=" + tenant);
+      if (r.ok) tenantInfo = await r.json();
+    } catch (e) {}
+  }
+
+  // ========== LOAD STUDENTS ==========
+  async function loadStudents() {
+    if (!token) {
+      showError("Please log in to view students.");
+      return;
+    }
+    showLoading();
+    try {
+      var r = await fetch("/api/enrollments?tenant=" + tenant, {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      if (!r.ok) throw new Error("Server returned " + r.status);
+      students = await r.json();
+      renderStudentTable();
+    } catch (e) {
+      showError("Could not load students. " + (e.message || ""));
+      console.error(e);
+    }
+  }
+
+  // ========== RENDER TABLE ==========
+  function renderStudentTable() {
+    var tbody = document.querySelector("#studentsTable tbody");
+    tbody.innerHTML = "";
+    if (!students.length) {
+      tbody.innerHTML = '<tr><td colspan="10" class="text-muted">No students enrolled yet.</td></tr>';
+      return;
+    }
+    students.forEach(function(s) {
+      var aStatus = s.assessment && s.assessment.scheduled ? "📅 " + (s.assessment.date || "TBD") : "—";
+      var fStatus = s.processing_fee ? s.processing_fee.amount + " (" + (s.processing_fee.paid ? "Paid" : "Unpaid") + ")" : "—";
+      var medical = s.medical_notes || "—";
+      var row = document.createElement("tr");
+      row.innerHTML =
+        "<td>" + s.admission_no + "</td>" +
+        "<td>" + s.first_name + " " + s.last_name + "</td>" +
+        "<td>" + s.class + "</td>" +
+        "<td>" + (s.section || "-") + "</td>" +
+        "<td>" + (s.parent_name || "-") + "</td>" +
+        "<td>" + (s.phone || "-") + "</td>" +
+        "<td>" + aStatus + "</td>" +
+        "<td>" + fStatus + "</td>" +
+        "<td>" + medical + "</td>" +
+        "<td class=\"actions\">" +
+          "<button class=\"btn-icon edit\" data-id=\"" + s.id + "\">✏️</button>" +
+          "<button class=\"btn-icon delete\" data-id=\"" + s.id + "\">🗑️</button>" +
+        "</td>";
+      tbody.appendChild(row);
+    });
+    document.querySelectorAll("#studentsTable .edit").forEach(function(btn) {
+      btn.onclick = function() { editStudent(btn.dataset.id); };
+    });
+    document.querySelectorAll("#studentsTable .delete").forEach(function(btn) {
+      btn.onclick = function() { deleteStudent(btn.dataset.id); };
+    });
+  }
+
+  // ========== MODAL ==========
+  function showStudentModal(title, student) {
+    document.getElementById("modalTitle").innerText = title;
+    document.getElementById("enrollmentModal").style.display = "block";
+    if (student) {
+      document.getElementById("studentId").value = student.id;
+      document.getElementById("admissionNo").value = student.admission_no;
+      document.getElementById("firstName").value = student.first_name;
+      document.getElementById("lastName").value = student.last_name;
+      document.getElementById("className").value = student.class;
+      document.getElementById("section").value = student.section || "";
+      document.getElementById("gender").value = student.gender || "Male";
+      document.getElementById("dob").value = student.dob || "";
+      document.getElementById("religion").value = student.religion || "";
+      document.getElementById("nationality").value = student.nationality || "";
+      document.getElementById("homeLanguage").value = student.home_language || "";
+      document.getElementById("enrollmentDate").value = student.enrollment_date || "";
+      document.getElementById("parentName").value = student.parent_name || "";
+      document.getElementById("phone").value = student.phone || "";
+      document.getElementById("email").value = student.email || "";
+      document.getElementById("address").value = student.address || "";
+      document.getElementById("medicalNotes").value = student.medical_notes || "";
+      document.getElementById("dietaryNotes").value = student.dietary_notes || "";
+      document.getElementById("specialNeeds").value = student.special_needs || "";
+      document.getElementById("transport").value = student.transport || "";
+      document.getElementById("siblings").value = student.siblings || "";
+      document.getElementById("interests").value = student.interests || "";
+      document.getElementById("paymentMode").value = student.payment_mode || "";
+      var ec = student.emergency_contact || {};
+      document.getElementById("emergencyName").value = ec.name || "";
+      document.getElementById("emergencyPhone").value = ec.phone || "";
+      document.getElementById("emergencyRelation").value = ec.relation || "";
+      var prev = student.previous_schools || [];
+      var rows = document.querySelectorAll(".previous-school-row");
+      for (var i = 0; i < 3; i++) {
+        rows[i].querySelector(".prev-school-name").value = prev[i] ? prev[i].name || "" : "";
+        rows[i].querySelector(".prev-school-year").value = prev[i] ? prev[i].year || "" : "";
+      }
+      var a = student.assessment || {};
+      document.getElementById("assessmentCheckbox").checked = a.scheduled || false;
+      document.getElementById("assessmentDate").value = a.date || "";
+      document.getElementById("assessmentSubject").value = a.subject || "";
+    } else {
+      document.getElementById("enrollmentForm").reset();
+      document.getElementById("studentId").value = "";
+      document.getElementById("admissionNo").value = "";
+      document.getElementById("assessmentCheckbox").checked = false;
+      document.querySelectorAll(".prev-school-name,.prev-school-year").forEach(function(i) { i.value = ""; });
+    }
+    document.getElementById("assessmentDetails").style.display = document.getElementById("assessmentCheckbox").checked ? "block" : "none";
+  }
+
+  function hideStudentModal() { document.getElementById("enrollmentModal").style.display = "none"; }
+  function showFeeModal() { document.getElementById("feeForm").reset(); document.getElementById("feeModal").style.display = "block"; }
+  function hideFeeModal() { document.getElementById("feeModal").style.display = "none"; }
+
+  function collectPreviousSchools() {
+    var rows = document.querySelectorAll(".previous-school-row");
+    var schools = [];
+    rows.forEach(function(row) {
+      var name = row.querySelector(".prev-school-name").value.trim();
+      var year = row.querySelector(".prev-school-year").value.trim();
+      if (name || year) schools.push({ name: name, year: year });
+    });
+    return schools;
+  }
+
+  function getFormData() {
+    return {
+      firstName: document.getElementById("firstName").value,
+      lastName: document.getElementById("lastName").value,
+      className: document.getElementById("className").value,
+      section: document.getElementById("section").value,
+      gender: document.getElementById("gender").value,
+      dob: document.getElementById("dob").value,
+      religion: document.getElementById("religion").value,
+      nationality: document.getElementById("nationality").value,
+      homeLanguage: document.getElementById("homeLanguage").value,
+      enrollmentDate: document.getElementById("enrollmentDate").value,
+      parentName: document.getElementById("parentName").value,
+      phone: document.getElementById("phone").value,
+      email: document.getElementById("email").value,
+      address: document.getElementById("address").value,
+      medicalNotes: document.getElementById("medicalNotes").value,
+      dietaryNotes: document.getElementById("dietaryNotes").value,
+      specialNeeds: document.getElementById("specialNeeds").value,
+      transport: document.getElementById("transport").value,
+      siblings: document.getElementById("siblings").value,
+      interests: document.getElementById("interests").value,
+      paymentMode: document.getElementById("paymentMode").value,
+      emergencyContact: {
+        name: document.getElementById("emergencyName").value,
+        phone: document.getElementById("emergencyPhone").value,
+        relation: document.getElementById("emergencyRelation").value
+      },
+      previousSchools: collectPreviousSchools(),
+      assessmentScheduled: document.getElementById("assessmentCheckbox").checked,
+      assessmentDate: document.getElementById("assessmentDate").value,
+      assessmentSubject: document.getElementById("assessmentSubject").value
+    };
+  }
+
+  var pendingData = null;
+
+  function saveStudent(e) {
+    e.preventDefault();
+    var id = document.getElementById("studentId").value;
+    var data = getFormData();
+    if (!id) {
+      if (tenantInfo.type === "private" || tenantInfo.type === "government-some-fees") {
+        pendingData = data;
+        showFeeModal();
+      } else if (tenantInfo.type === "government-no-fees") {
+        submitEnrollment(data).then(function(newStud) {
+          if (newStud) {
+            window.showNotification("Student enrolled successfully!", "success");
+            loadStudents();
+          }
+        });
+      } else {
+        submitEnrollment(data).then(function(newStud) {
+          if (newStud) {
+            window.location.href = "/pages/pay-fees.html?student_id=" + newStud.id + "&tenant=" + tenant;
+          }
+        });
+      }
+    } else {
+      submitEnrollment(data, id).then(function() { loadStudents(); });
+    }
+  }
+
+  async function submitEnrollment(data, id) {
+    var url = id ? "/api/enrollments/" + id + "?tenant=" + tenant : "/api/enrollments?tenant=" + tenant;
+    var method = id ? "PUT" : "POST";
+    try {
+      var res = await fetch(url, {
+        method: method,
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+        body: JSON.stringify(data)
+      });
+      if (res.ok) {
+        var saved = await res.json();
+        hideStudentModal();
+        hideFeeModal();
+        if (!id) loadStudents();
+        return saved;
+      } else {
+        var err = await res.json();
+        alert("SAVE ERROR: " + (err.error || JSON.stringify(err)));
+        return null;
+      }
+    } catch (e) {
+      alert("NETWORK ERROR: " + e.message);
+      return null;
+    }
+  }
+
+  async function createEnrollmentWithFee(processingFee) {
+    if (!pendingData) return;
+    var data = Object.assign({}, pendingData, { processingFee: processingFee });
+    var newStud = await submitEnrollment(data);
+    if (newStud) {
+      pendingData = null;
+      window.location.href = "/pages/pay-fees.html?student_id=" + newStud.id + "&tenant=" + tenant;
+    }
+  }
+
+  function editStudent(id) {
+    var s = students.find(function(s) { return s.id === id; });
+    if (s) showStudentModal("Edit Student", s);
+  }
+
+  async function deleteStudent(id) {
+    if (!confirm("Delete this student?")) return;
+    try {
+      await fetch("/api/enrollments/" + id + "?tenant=" + tenant, {
+        method: "DELETE",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      loadStudents();
+    } catch (e) {
+      window.showNotification("Failed to delete student", "error");
+    }
+  }
+
+  // ========== BUILD PAGE ==========
+  document.addEventListener("DOMContentLoaded", async function() {
+    await loadTenantInfo();
+
+    document.getElementById("page-content").innerHTML =
+      '<div class="module-header"><h2>Enrollment Management</h2><button class="btn-primary" id="addStudentBtn">+ Add Student</button></div>' +
+      '<div class="modal" id="enrollmentModal"><div class="modal-overlay"></div><div class="modal-content">' +
+        '<span class="modal-close" id="closeModalBtn">&times;</span><h3 id="modalTitle">Add New Student</h3>' +
+        '<form id="enrollmentForm"><input type="hidden" id="studentId">' +
+          '<fieldset><legend>Personal Information</legend>' +
+            '<div class="form-row"><div class="form-group"><label>Admission No</label><input type="text" id="admissionNo" readonly placeholder="Auto-generated" class="readonly-input"></div><div class="form-group"><label>Enrollment Date</label><input type="date" id="enrollmentDate"></div></div>' +
+            '<div class="form-row"><div class="form-group"><label>First Name *</label><input type="text" id="firstName" required></div><div class="form-group"><label>Last Name *</label><input type="text" id="lastName" required></div></div>' +
+            '<div class="form-row"><div class="form-group"><label>Date of Birth</label><input type="date" id="dob"></div><div class="form-group"><label>Gender</label><select id="gender"><option value="Male">Male</option><option value="Female">Female</option></select></div></div>' +
+            '<div class="form-row"><div class="form-group"><label>Religion</label><input type="text" id="religion"></div><div class="form-group"><label>Nationality</label><input type="text" id="nationality"></div></div>' +
+            '<div class="form-row"><div class="form-group"><label>Language at Home</label><input type="text" id="homeLanguage"></div></div>' +
+          '</fieldset>' +
+          '<fieldset><legend>Class Assignment</legend>' +
+            '<div class="form-row"><div class="form-group"><label>Class *</label><input type="text" id="className" required></div><div class="form-group"><label>Section</label><input type="text" id="section"></div></div>' +
+          '</fieldset>' +
+          '<fieldset><legend>Parent / Guardian</legend>' +
+            '<div class="form-row"><div class="form-group"><label>Parent/Guardian Name</label><input type="text" id="parentName"></div><div class="form-group"><label>Phone</label><input type="text" id="phone"></div></div>' +
+            '<div class="form-row"><div class="form-group"><label>Email</label><input type="email" id="email"></div><div class="form-group"><label>Address</label><input type="text" id="address"></div></div>' +
+          '</fieldset>' +
+          '<fieldset><legend>Emergency Contact</legend>' +
+            '<div class="form-row"><div class="form-group"><label>Name</label><input type="text" id="emergencyName"></div><div class="form-group"><label>Phone</label><input type="text" id="emergencyPhone"></div></div>' +
+            '<div class="form-row"><div class="form-group"><label>Relationship</label><input type="text" id="emergencyRelation"></div></div>' +
+          '</fieldset>' +
+          '<fieldset><legend>Medical & Dietary</legend>' +
+            '<div class="form-group"><label>Special Health Conditions / Allergies</label><textarea id="medicalNotes" rows="3" placeholder="e.g. Asthma, peanut allergy, etc."></textarea></div>' +
+            '<div class="form-group"><label>Dietary Restrictions</label><textarea id="dietaryNotes" rows="2" placeholder="e.g. Vegetarian, no pork"></textarea></div>' +
+            '<div class="form-group"><label>Special Educational Needs</label><textarea id="specialNeeds" rows="2" placeholder="e.g. Dyslexia, ADHD"></textarea></div>' +
+          '</fieldset>' +
+          '<fieldset><legend>Transport</legend>' +
+            '<div class="form-row"><div class="form-group"><label>Bus Route / Pickup Point</label><input type="text" id="transport"></div></div>' +
+          '</fieldset>' +
+          '<fieldset><legend>Other Information</legend>' +
+            '<div class="form-row"><div class="form-group"><label>Siblings at School</label><textarea id="siblings" rows="2" placeholder="e.g. John Banda - Grade 5"></textarea></div><div class="form-group"><label>Extra-Curricular Interests</label><textarea id="interests" rows="2" placeholder="e.g. Football, Choir"></textarea></div></div>' +
+            '<div class="form-row"><div class="form-group"><label>Mode of Payment</label><select id="paymentMode"><option value="">-- Select --</option><option value="upfront">Upfront</option><option value="termly">Termly</option><option value="monthly">Monthly</option></select></div></div>' +
+          '</fieldset>' +
+          '<fieldset><legend>Previous Education (Optional)</legend><div id="previousSchoolsContainer">' +
+            '<div class="previous-school-row"><div class="form-group"><label>School 1 Name</label><input type="text" class="prev-school-name" placeholder="e.g., Riverside Primary"></div><div class="form-group"><label>Year(s) Attended</label><input type="text" class="prev-school-year" placeholder="e.g., 2015-2018"></div></div>' +
+            '<div class="previous-school-row"><div class="form-group"><label>School 2 Name</label><input type="text" class="prev-school-name"></div><div class="form-group"><label>Year(s) Attended</label><input type="text" class="prev-school-year"></div></div>' +
+            '<div class="previous-school-row"><div class="form-group"><label>School 3 Name</label><input type="text" class="prev-school-name"></div><div class="form-group"><label>Year(s) Attended</label><input type="text" class="prev-school-year"></div></div>' +
+          '</div></fieldset>' +
+          '<fieldset><legend>Placement Assessment (Optional)</legend>' +
+            '<div class="form-row"><div class="form-group"><label class="checkbox-label"><input type="checkbox" id="assessmentCheckbox"> Schedule an assessment</label></div></div>' +
+            '<div id="assessmentDetails" style="display:none;"><div class="form-row"><div class="form-group"><label>Assessment Date</label><input type="date" id="assessmentDate"></div><div class="form-group"><label>Subject / Focus</label><input type="text" id="assessmentSubject" placeholder="e.g., Mathematics"></div></div></div>' +
+          '</fieldset>' +
+          '<div class="form-actions"><button type="button" class="btn-secondary" id="cancelBtn">Cancel</button><button type="submit" class="btn-primary">Save</button></div>' +
+        '</form></div></div>' +
+      '<div class="modal" id="feeModal"><div class="modal-overlay"></div><div class="modal-content" style="max-width:400px;">' +
+        '<h3>Processing Fee (Required)</h3><p>This school requires a processing fee to complete enrollment.</p>' +
+        '<form id="feeForm"><div class="form-group"><label>Amount *</label><input type="number" id="feeAmount" placeholder="Enter amount" required min="1"></div>' +
+        '<div class="form-group"><label>Payment Method</label><select id="feeMethod"><option>Cash</option><option>Bank Transfer</option><option>Mobile Money</option><option>Cheque</option></select></div>' +
+        '<div class="form-group"><label class="checkbox-label"><input type="checkbox" id="feePaid"> Mark as Paid</label></div>' +
+        '<div class="form-actions"><button type="submit" class="btn-primary">Confirm & Enroll</button></div></form></div></div>' +
+      '<div class="table-container"><table class="data-table" id="studentsTable"><thead><tr><th>Adm No</th><th>Name</th><th>Class</th><th>Section</th><th>Parent</th><th>Phone</th><th>Assessment</th><th>Fee</th><th>Medical</th><th>Actions</th></tr></thead><tbody></tbody></table></div>';
+
+    // Attach events
+    document.getElementById("addStudentBtn").addEventListener("click", function() { showStudentModal("Add New Student"); });
+    document.getElementById("closeModalBtn").addEventListener("click", hideStudentModal);
+    document.getElementById("cancelBtn").addEventListener("click", hideStudentModal);
+    document.querySelector("#enrollmentModal .modal-overlay").addEventListener("click", hideStudentModal);
+    document.getElementById("enrollmentForm").addEventListener("submit", saveStudent);
+    document.getElementById("assessmentCheckbox").addEventListener("change", function() {
+      document.getElementById("assessmentDetails").style.display = this.checked ? "block" : "none";
+    });
+    document.getElementById("feeForm").addEventListener("submit", async function(e) {
+      e.preventDefault();
+      var amount = parseFloat(document.getElementById("feeAmount").value);
+      var paid = document.getElementById("feePaid").checked;
+      if (!paid || amount <= 0) {
+        alert("You must mark the processing fee as Paid with a valid amount to enroll the student.");
+        return;
+      }
+      var fee = { amount: amount, method: document.getElementById("feeMethod").value, paid: paid };
+      hideFeeModal();
+      await createEnrollmentWithFee(fee);
+    });
+    document.querySelector("#feeModal .modal-overlay").addEventListener("click", hideFeeModal);
+
+    // Load students
+    loadStudents();
+  });
+})();
+</script></body></html>
