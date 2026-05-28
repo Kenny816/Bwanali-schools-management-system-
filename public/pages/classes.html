@@ -1,14 +1,56 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Classes – Bwanali</title><link rel="stylesheet" href="/style.css"></head><body data-page="classes"><script src="/shared.js"></script><script>
-var params=new URLSearchParams(window.location.search),tenant=params.get("tenant")||"demo",classes=[],staff=[],students=[];
-async function loadData(){var r=await Promise.all([fetch("/api/classes?tenant="+tenant),fetch("/api/staff?tenant="+tenant),fetch("/api/enrollments?tenant="+tenant)]);classes=await r[0].json();staff=await r[1].json();students=await r[2].json();renderTable();}
-function renderTable(){var tb=document.querySelector("#classesTable tbody");tb.innerHTML="";if(!classes.length){tb.innerHTML='<tr><td colspan="6">No classes.</td></tr>';return;}classes.forEach(function(c){var t=staff.find(s=>s.id===c.teacher_id);var tn=t?t.first_name+" "+t.last_name:"-";var sc=students.filter(s=>s.class===c.name).length;var row=document.createElement("tr");row.innerHTML='<td>'+c.name+'</td><td>'+(c.order||"-")+'</td><td>'+(c.section||"-")+'</td><td>'+(c.capacity||"-")+'</td><td>'+tn+'</td><td>'+sc+'</td><td><button class="btn-icon edit-class" data-id="'+c.id+'">✏️</button><button class="btn-icon delete-class" data-id="'+c.id+'">🗑️</button></td>';tb.appendChild(row);});document.querySelectorAll(".edit-class").forEach(b=>b.onclick=function(){editClass(b.dataset.id);});document.querySelectorAll(".delete-class").forEach(b=>b.onclick=function(){deleteClass(b.dataset.id);});}
-function openModal(cls){var sel=document.getElementById("classTeacher");sel.innerHTML='<option value="">-- None --</option>'+staff.map(s=>'<option value="'+s.id+'">'+s.first_name+" "+s.last_name+'</option>').join("");if(cls){document.getElementById("classId").value=cls.id;document.getElementById("className").value=cls.name;document.getElementById("classOrder").value=cls.order||"";document.getElementById("classSection").value=cls.section||"";document.getElementById("classCapacity").value=cls.capacity||"";sel.value=cls.teacher_id||"";}else{document.getElementById("classForm").reset();document.getElementById("classId").value="";}document.getElementById("classModal").style.display="block";}
-function closeModal(){document.getElementById("classModal").style.display="none";}
-async function saveClass(e){e.preventDefault();var id=document.getElementById("classId").value,data={name:document.getElementById("className").value,order:parseInt(document.getElementById("classOrder").value)||0,section:document.getElementById("classSection").value,capacity:parseInt(document.getElementById("classCapacity").value)||0,teacher_id:document.getElementById("classTeacher").value||null};var url=id?"/api/classes/"+id+"?tenant="+tenant:"/api/classes?tenant="+tenant,method=id?"PUT":"POST";await fetch(url,{method:method,headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});closeModal();loadData();}
-function editClass(id){var c=classes.find(c=>c.id===id);if(c)openModal(c);}
-function deleteClass(id){if(confirm("Delete?")){fetch("/api/classes/"+id+"?tenant="+tenant,{method:"DELETE"}).then(loadData);}}
-document.addEventListener("DOMContentLoaded",async function(){
-document.getElementById("page-content").innerHTML='<div class="module-header"><h2>Classes & Sections</h2><button class="btn-primary" id="addClassBtn">+ Add Class</button></div><div class="modal" id="classModal"><div class="modal-overlay"></div><div class="modal-content"><span class="modal-close" id="closeClassModalBtn">&times;</span><h3>Add Class</h3><form id="classForm"><input type="hidden" id="classId"><div class="form-row"><div class="form-group"><label>Class Name</label><input type="text" id="className" required></div><div class="form-group"><label>Order</label><input type="number" id="classOrder"></div></div><div class="form-row"><div class="form-group"><label>Section</label><input type="text" id="classSection"></div><div class="form-group"><label>Capacity</label><input type="number" id="classCapacity"></div></div><div class="form-group"><label>Class Teacher</label><select id="classTeacher"></select></div><div class="form-actions"><button type="button" class="btn-secondary" id="cancelClassBtn">Cancel</button><button type="submit" class="btn-primary">Save</button></div></form></div></div><div class="table-container"><table class="data-table" id="classesTable"><thead><tr><th>Name</th><th>Order</th><th>Section</th><th>Capacity</th><th>Teacher</th><th>Students</th><th>Actions</th></tr></thead><tbody></tbody></table></div>';
-await loadData();document.getElementById("addClassBtn").addEventListener("click",()=>openModal());document.getElementById("closeClassModalBtn").addEventListener("click",closeModal);document.getElementById("cancelClassBtn").addEventListener("click",closeModal);document.querySelector("#classModal .modal-overlay").addEventListener("click",closeModal);document.getElementById("classForm").addEventListener("submit",saveClass);
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Classes – Bwanali</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="classes">
+<script src="/shared.js"></script>
+<div id="page-content"></div>
+<script>
+document.addEventListener("DOMContentLoaded", async function() {
+  const params = new URLSearchParams(window.location.search);
+  const tenant = params.get('tenant') || 'demo';
+  const token = sessionStorage.getItem('bwanali_token');
+  if (!token) { window.location.href = '/login.html'; return; }
+  let classes = [];
+  const content = document.getElementById('page-content');
+  content.innerHTML = '<div class="module-header"><h2>Classes & Sections</h2></div>Loading...';
+
+  async function loadClasses() {
+    const res = await fetch(`/api/classes?tenant=${tenant}`);
+    const r = await res.json();
+    classes = r.data || r;
+    renderTable();
+  }
+  async function renderTable() {
+    let counts = {};
+    try {
+      const cr = await fetch(`/api/classes/student-counts?tenant=${tenant}`);
+      if (cr.ok) counts = await cr.json();
+    } catch(e) {}
+    const search = (document.getElementById('searchInput')?.value || '').toLowerCase();
+    const filtered = classes.filter(c => !search || c.name.toLowerCase().includes(search));
+    if (!filtered.length) {
+      content.innerHTML = '<div class="module-header"><h2>Classes & Sections</h2></div><p>No classes found.</p>';
+      return;
+    }
+    let html = '<div class="module-header"><h2>Classes & Sections</h2></div><input type="text" id="searchInput" placeholder="Search classes..." style="padding:8px;margin-bottom:10px;width:200px;">';
+    html += '<table class="data-table"><thead><tr><th>Name</th><th>Order</th><th>Section</th><th>Capacity</th><th>Teacher</th><th>Students</th></tr></thead><tbody>';
+    filtered.forEach(c => {
+      html += `<tr>
+        <td>${c.name}</td><td>${c.numeric_order || '-'}</td><td>${c.section || '-'}</td><td>${c.capacity || '-'}</td><td>${c.class_teacher || '-'}</td>
+        <td><span style="background:#1e3c72;color:#fff;border-radius:12px;padding:2px 10px;">${counts[c.name] || 0}</span></td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    content.innerHTML = html;
+    document.getElementById('searchInput').addEventListener('input', renderTable);
+  }
+  loadClasses();
 });
-</script></body></html>
+</script>
+</body>
+</html>

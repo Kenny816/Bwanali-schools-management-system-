@@ -29,6 +29,7 @@
       '<nav id="navMenu">' +
         profileLink +
         '<a href="/pages/enrollment.html?tenant='+tenant+'" class="nav-item" data-page="enrollment">📝 Enrollment</a>' +
+        '<a href="/pages/students.html?tenant='+tenant+'" class="nav-item" data-page="students">👥 Students</a>' +
         '<a href="/pages/classes.html?tenant='+tenant+'" class="nav-item" data-page="classes">🏫 Classes</a>' +
         '<a href="/pages/staff.html?tenant='+tenant+'" class="nav-item" data-page="staff">👩‍🏫 Staff</a>' +
         '<a href="/pages/committees.html?tenant='+tenant+'" class="nav-item" data-page="committees">🤝 Committees</a>' +

@@ -2,13 +2,14 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { supabase } = require('./supabaseClient');
+
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
-// ---------- MIDDLEWARE ----------
+// ======================== MIDDLEWARE ========================
 async function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ error: 'Please log in to continue.' });
@@ -18,7 +19,9 @@ async function authMiddleware(req, res, next) {
     if (error || !user) return res.status(401).json({ error: 'Your session has expired. Please log in again.' });
     req.user = user;
     next();
-  } catch (e) { return res.status(401).json({ error: 'Authentication failed. Please try again.' }); }
+  } catch (e) {
+    return res.status(401).json({ error: 'Authentication failed. Please try again.' });
+  }
 }
 
 function canCreateRole(creatorRole, targetRole) {
@@ -28,6 +31,7 @@ function canCreateRole(creatorRole, targetRole) {
   return false;
 }
 
+// Tenant middleware
 app.use(async (req, res, next) => {
   const sub = req.query.tenant || 'demo';
   const { data } = await supabase.from('tenants').select('*').eq('subdomain', sub).maybeSingle();
@@ -36,33 +40,27 @@ app.use(async (req, res, next) => {
   next();
 });
 
-// Helper: paginate and search
+// Paginated query helper
 async function paginatedQuery(baseQuery, req) {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 20;
   const search = req.query.search || '';
   const sortBy = req.query.sortBy || 'created_at';
   const sortOrder = req.query.sortOrder || 'desc';
-
   let query = baseQuery;
   if (search) {
     query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,admission_no.ilike.%${search}%,name.ilike.%${search}%,title.ilike.%${search}%`);
   }
-
-  // Get total count
   const { count, error: countErr } = await query.select('*', { count: 'exact', head: true });
   if (countErr) return { data: [], error: countErr, total: 0, page, limit };
-
-  // Get page data
   const { data, error } = await query
     .select('*')
     .order(sortBy, { ascending: sortOrder === 'asc' })
     .range((page - 1) * limit, page * limit - 1);
-
   return { data, error, total: count, page, limit };
 }
 
-// ---------- PUBLIC ROUTES ----------
+// ======================== PUBLIC ROUTES ========================
 app.get('/', (req, res) => res.redirect('/login.html?tenant=' + req.tenantSub));
 
 app.post('/api/auth/register-admin', async (req, res) => {
@@ -120,23 +118,15 @@ app.get('/api/tenants', async (req, res) => {
   res.json(data || []);
 });
 
-// ---------- DASHBOARD ----------
+// ======================== DASHBOARD ========================
 app.get('/api/dashboard', authMiddleware, async (req, res) => {
   const [students, staff] = await Promise.all([
     supabase.from('students').select('*', { count: 'exact', head: true }).eq('tenant_id', req.tenant.id),
     supabase.from('staff').select('*', { count: 'exact', head: true }).eq('tenant_id', req.tenant.id)
   ]);
-  res.json({
-    stats: {
-      students: students.count,
-      staff: staff.count,
-      attendance: '85%',
-      feesCollected: 'ZMW 12,500'
-    }
-  });
+  res.json({ stats: { students: students.count, staff: staff.count, attendance: '85%', feesCollected: 'ZMW 12,500' } });
 });
 
-// ---------- NOTIFICATION BELL ----------
 app.get('/api/notifications/bell', authMiddleware, async (req, res) => {
   const { count } = await supabase.from('announcements').select('*', { count: 'exact', head: true })
     .eq('tenant_id', req.tenant.id)
@@ -144,7 +134,7 @@ app.get('/api/notifications/bell', authMiddleware, async (req, res) => {
   res.json({ unread: (count || 0) });
 });
 
-// ---------- ENROLLMENTS ----------
+// ======================== ENROLLMENTS ========================
 app.get('/api/enrollments', authMiddleware, async (req, res) => {
   let base = supabase.from('students').select('*').eq('tenant_id', req.tenant.id);
   if (req.query.class_name) base = base.eq('class', req.query.class_name);
@@ -153,16 +143,14 @@ app.get('/api/enrollments', authMiddleware, async (req, res) => {
   res.json(result);
 });
 
-app.get('/api/enrollments/export', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase.from('students').select('*').eq('tenant_id', req.tenant.id);
-  if (error) return res.status(500).json({ error: error.message });
-  const csv = ['Admission No,Name,Class,Section,Parent,Phone,Medical'];
-  (data || []).forEach(s => {
-    csv.push(`"${s.admission_no}","${s.first_name} ${s.last_name}","${s.class}","${s.section||''}","${s.parent_name||''}","${s.phone||''}","${s.medical_notes||''}"`);
-  });
-  res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', 'attachment; filename=students.csv');
-  res.send(csv.join('\n'));
+app.get('/api/enrollments/:id', authMiddleware, async (req, res) => {
+  const { data, error } = await supabase.from('students')
+    .select('*')
+    .eq('id', req.params.id)
+    .eq('tenant_id', req.tenant.id)
+    .single();
+  if (error) return res.status(404).json({ error: 'Student not found.' });
+  res.json(data);
 });
 
 app.post('/api/enrollments', authMiddleware, async (req, res) => {
@@ -177,8 +165,8 @@ app.post('/api/enrollments', authMiddleware, async (req, res) => {
     enrollment_date: req.body.enrollmentDate,
     parent_name: req.body.parentName, phone: req.body.phone, email: req.body.email, address: req.body.address,
     medical_notes: req.body.medicalNotes||'', dietary_notes: req.body.dietaryNotes||'',
-    special_needs: req.body.specialNeeds||'',
-    transport: req.body.transport||'', siblings: req.body.siblings||'', interests: req.body.interests||'',
+    special_needs: req.body.specialNeeds||'', transport: req.body.transport||'',
+    siblings: req.body.siblings||'', interests: req.body.interests||'',
     payment_mode: req.body.paymentMode||'', documents: req.body.documents||'',
     emergency_contact: req.body.emergencyContact||null,
     previous_schools: req.body.previousSchools||[],
@@ -194,87 +182,110 @@ app.put('/api/enrollments/:id', authMiddleware, async (req, res) => {
     first_name: req.body.firstName, last_name: req.body.lastName,
     class: req.body.className, section: req.body.section,
     gender: req.body.gender, dob: req.body.dob,
-    religion: req.body.religion||'', nationality: req.body.nationality||'',
-    home_language: req.body.homeLanguage||'', profile_picture: req.body.profilePicture||'',
     enrollment_date: req.body.enrollmentDate,
     parent_name: req.body.parentName, phone: req.body.phone, email: req.body.email, address: req.body.address,
-    medical_notes: req.body.medicalNotes||'', dietary_notes: req.body.dietaryNotes||'',
-    special_needs: req.body.specialNeeds||'',
-    transport: req.body.transport||'', siblings: req.body.siblings||'', interests: req.body.interests||'',
-    payment_mode: req.body.paymentMode||'', documents: req.body.documents||'',
-    emergency_contact: req.body.emergencyContact||null
-  }).eq('id', req.params.id).select('*').single();
+    medical_notes: req.body.medicalNotes||'', special_needs: req.body.specialNeeds||'',
+    profile_picture: req.body.profilePicture||''
+  }).eq('id', req.params.id).eq('tenant_id', req.tenant.id).select('*').single();
   if (error) return res.status(404).json({ error: 'Student not found.' });
   res.json(data);
 });
 
 app.delete('/api/enrollments/:id', authMiddleware, async (req, res) => {
-  await supabase.from('students').delete().eq('id', req.params.id);
+  await supabase.from('students').delete().eq('id', req.params.id).eq('tenant_id', req.tenant.id);
   res.json({ success: true });
 });
 
-// ---------- CLASSES ----------
+// ======================== PROFILE PICTURE ========================
+app.put('/api/enrollments/:id/profile-picture', authMiddleware, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('students')
+      .update({
+        profile_picture: req.body.profile_picture || '',
+        first_name: req.body.first_name,
+        last_name: req.body.last_name,
+        phone: req.body.phone,
+        email: req.body.email
+      })
+      .eq('id', req.params.id)
+      .eq('tenant_id', req.tenant.id)
+      .select('*')
+      .single();
+
+    if (error) {
+      console.error('Profile picture update error:', error);
+      return res.status(400).json({ error: error.message });
+    }
+    res.json(data);
+  } catch (err) {
+    console.error('Profile picture endpoint error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ======================== CLASSES ========================
 app.get('/api/classes', authMiddleware, async (req, res) => {
   let base = supabase.from('classes').select('*').eq('tenant_id', req.tenant.id);
   const result = await paginatedQuery(base, req);
   if (result.error) return res.status(500).json({ error: result.error.message });
   res.json(result);
 });
-app.get('/api/classes/export', authMiddleware, async (req, res) => {
-  const { data } = await supabase.from('classes').select('*').eq('tenant_id', req.tenant.id);
-  res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', 'attachment; filename=classes.csv');
-  res.send('Name,Order,Section,Capacity,Teacher\n' + (data||[]).map(c => `"${c.name}","${c.order||''}","${c.section||''}","${c.capacity||''}","${c.teacher_id||''}"`).join('\n'));
-});
+
 app.post('/api/classes', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('classes').insert({...req.body, tenant_id: req.tenant.id}).select('*').single();
-  if (error) return res.status(400).json({ error: 'Could not save class. Please try again.' });
+  if (error) return res.status(400).json({ error: 'Could not save class.' });
   res.status(201).json(data);
 });
+
 app.put('/api/classes/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('classes').update(req.body).eq('id', req.params.id).select('*').single();
   if (error) return res.status(404).json({ error: 'Class not found.' });
   res.json(data);
 });
+
 app.delete('/api/classes/:id', authMiddleware, async (req, res) => {
   await supabase.from('classes').delete().eq('id', req.params.id);
   res.json({ success: true });
 });
 
-// ---------- STAFF ----------
+app.get('/api/classes/:id/students', authMiddleware, async (req, res) => {
+  const { data: classData } = await supabase.from('classes').select('*').eq('id', req.params.id).single();
+  const { data: students } = await supabase.from('students').select('*').eq('class', classData.name).eq('tenant_id', req.tenant.id);
+  res.json({ class: classData, students: students || [] });
+});
+
+// ======================== STAFF ========================
 app.get('/api/staff', authMiddleware, async (req, res) => {
   let base = supabase.from('staff').select('*').eq('tenant_id', req.tenant.id);
   const result = await paginatedQuery(base, req);
   if (result.error) return res.status(500).json({ error: result.error.message });
   res.json(result);
 });
-app.get('/api/staff/export', authMiddleware, async (req, res) => {
-  const { data } = await supabase.from('staff').select('*').eq('tenant_id', req.tenant.id);
-  res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', 'attachment; filename=staff.csv');
-  res.send('Name,Role,Department,Subjects,Phone,Email\n' + (data||[]).map(s => `"${s.first_name} ${s.last_name}","${s.role}","${s.department||''}","${s.subjects||''}","${s.phone||''}","${s.email||''}"`).join('\n'));
-});
+
 app.post('/api/staff', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('staff').insert({...req.body, tenant_id: req.tenant.id}).select('*').single();
-  if (error) return res.status(400).json({ error: 'Could not save staff. Please check the information.' });
+  if (error) return res.status(400).json({ error: 'Could not save staff.' });
   res.status(201).json(data);
 });
+
 app.put('/api/staff/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('staff').update(req.body).eq('id', req.params.id).select('*').single();
   if (error) return res.status(404).json({ error: 'Staff not found.' });
   res.json(data);
 });
+
 app.delete('/api/staff/:id', authMiddleware, async (req, res) => {
   await supabase.from('staff').delete().eq('id', req.params.id);
   res.json({ success: true });
 });
 
-// ---------- COMMITTEES ----------
+// ======================== COMMITTEES ========================
 app.get('/api/committees', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('committees').select('*').eq('tenant_id', req.tenant.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
+
 app.post('/api/committees', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('committees').insert({
     name: req.body.name, description: req.body.description,
@@ -284,63 +295,51 @@ app.post('/api/committees', authMiddleware, async (req, res) => {
   if (error) return res.status(400).json({ error: 'Could not save committee.' });
   res.status(201).json(data);
 });
+
 app.put('/api/committees/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('committees').update(req.body).eq('id', req.params.id).select('*').single();
   if (error) return res.status(404).json({ error: 'Committee not found.' });
   res.json(data);
 });
+
 app.delete('/api/committees/:id', authMiddleware, async (req, res) => {
   await supabase.from('committees').delete().eq('id', req.params.id);
   res.json({ success: true });
 });
 
-app.get('/api/committees/:id/meetings', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase.from('committee_meetings').select('*').eq('committee_id', req.params.id);
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-app.post('/api/committees/:id/meetings', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase.from('committee_meetings').insert({
-    committee_id: req.params.id, title: req.body.title, date: req.body.date,
-    time: req.body.time||null, duration: req.body.duration||null,
-    agenda: req.body.agenda||'', notes: req.body.notes||'', status: req.body.status||'Scheduled',
-    document_name: req.body.document_name||null
-  }).select('*').single();
-  if (error) return res.status(400).json({ error: 'Could not save meeting.' });
-  res.status(201).json(data);
-});
-
-// ---------- ASSESSMENTS ----------
+// ======================== ASSESSMENTS ========================
 app.get('/api/assessments', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('assessments').select('*').eq('tenant_id', req.tenant.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
+
 app.post('/api/assessments', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('assessments').insert({...req.body, tenant_id: req.tenant.id}).select('*').single();
   if (error) return res.status(400).json({ error: 'Could not save assessment.' });
   res.status(201).json(data);
 });
+
 app.put('/api/assessments/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('assessments').update(req.body).eq('id', req.params.id).select('*').single();
   if (error) return res.status(404).json({ error: 'Assessment not found.' });
   res.json(data);
 });
+
 app.delete('/api/assessments/:id', authMiddleware, async (req, res) => {
   await supabase.from('assessments').delete().eq('id', req.params.id);
   res.json({ success: true });
 });
 
-// ---------- ATTENDANCE ----------
+// ======================== ATTENDANCE ========================
 app.get('/api/attendance', authMiddleware, async (req, res) => {
   let q = supabase.from('attendance').select('*').eq('tenant_id', req.tenant.id);
-  if (req.query.class_name) q = q.eq('class_name', req.query.class_name);
-  if (req.query.start_date && req.query.end_date) q = q.gte('date', req.query.start_date).lte('date', req.query.end_date);
-  else if (req.query.date) q = q.eq('date', req.query.date);
+  if (req.query.date) q = q.eq('date', req.query.date);
   const { data, error } = await q;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
+
 app.post('/api/attendance/batch', authMiddleware, async (req, res) => {
   const records = req.body.records.map(r => ({
     tenant_id: req.tenant.id, date: req.body.date,
@@ -352,7 +351,7 @@ app.post('/api/attendance/batch', authMiddleware, async (req, res) => {
   res.status(201).json(data);
 });
 
-// ---------- INVOICES & PAYMENTS ----------
+// ======================== INVOICES & PAYMENTS ========================
 app.get('/api/invoices', authMiddleware, async (req, res) => {
   let q = supabase.from('invoices').select('*').eq('tenant_id', req.tenant.id);
   if (req.query.student_id) q = q.eq('student_id', req.query.student_id);
@@ -361,6 +360,7 @@ app.get('/api/invoices', authMiddleware, async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
+
 app.post('/api/invoices', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('invoices').insert({
     ...req.body, tenant_id: req.tenant.id, invoice_no: 'INV-'+Date.now()
@@ -368,67 +368,93 @@ app.post('/api/invoices', authMiddleware, async (req, res) => {
   if (error) return res.status(400).json({ error: 'Could not create invoice.' });
   res.status(201).json(data);
 });
-app.post('/api/invoices/batch', authMiddleware, async (req, res) => {
-  const records = req.body.fees.map(f => ({
-    tenant_id: req.tenant.id, invoice_no: 'INV-'+Date.now()+'-'+Math.random().toString(36).substr(2,3),
-    student_id: req.body.student_id, fee_type_id: f.fee_type_id, amount: f.amount, status:'Unpaid'
-  }));
-  const { data, error } = await supabase.from('invoices').insert(records).select('*');
-  if (error) return res.status(400).json({ error: 'Could not create invoices.' });
-  res.status(201).json(data);
-});
-app.post('/api/invoices/batch-with-payment', authMiddleware, async (req, res) => {
-  const records = req.body.fees.map(f => ({
-    tenant_id: req.tenant.id, invoice_no: 'INV-'+Date.now()+'-'+Math.random().toString(36).substr(2,3),
-    student_id: req.body.student_id, fee_type_id: f.fee_type_id, amount: f.amount, status:'Paid'
-  }));
-  const { data: invData, error } = await supabase.from('invoices').insert(records).select('*');
-  if (error) return res.status(400).json({ error: 'Could not process payment.' });
-  await supabase.from('payments').insert(invData.map(inv => ({ tenant_id: req.tenant.id, invoice_id: inv.id, amount: inv.amount, method:'Cash' })));
-  res.status(201).json(invData);
-});
-app.post('/api/invoices/:id/pay', authMiddleware, async (req, res) => {
-  const { data: inv, error } = await supabase.from('invoices').update({ status:'Paid' }).eq('id', req.params.id).select('*').single();
-  if (error) return res.status(404).json({ error: 'Invoice not found.' });
-  await supabase.from('payments').insert({ tenant_id: req.tenant.id, invoice_id: inv.id, amount: req.body.amount||inv.amount, method: req.body.method||'Cash' });
-  res.json({ invoice: inv });
-});
-app.get('/api/payments', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase.from('payments').select('*').eq('tenant_id', req.tenant.id);
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-app.get('/api/accounts/summary', authMiddleware, async (req, res) => {
-  const { data: invData } = await supabase.from('invoices').select('amount, status').eq('tenant_id', req.tenant.id);
-  const { data: payData } = await supabase.from('payments').select('amount').eq('tenant_id', req.tenant.id);
-  const totalInvoiced = (invData||[]).reduce((s,i) => s+parseFloat(i.amount),0);
-  const totalCollected = (payData||[]).reduce((s,p) => s+parseFloat(p.amount),0);
-  res.json({ totalInvoiced, totalCollected, outstanding: totalInvoiced-totalCollected, invoiceCount: (invData||[]).length, paidInvoices: (invData||[]).filter(i=>i.status==='Paid').length, unpaidInvoices: (invData||[]).filter(i=>i.status==='Unpaid').length });
+
+app.post('/api/payments', authMiddleware, async (req, res) => {
+  const { student_id, amount, payment_method, remarks, invoice_id } = req.body;
+  if (!student_id || !amount) return res.status(400).json({ error: 'Student and amount required.' });
+  const receipt = 'RCP' + Date.now();
+  const paymentData = {
+    tenant_id: req.tenant.id, student_id, amount,
+    payment_method: payment_method || 'Cash',
+    remarks: remarks || '', receipt_number: receipt,
+    invoice_id: invoice_id || null
+  };
+  const { data: payment, error } = await supabase.from('payments').insert(paymentData).select('*').single();
+  if (error) return res.status(400).json({ error: 'Could not record payment.' });
+  if (invoice_id) {
+    await supabase.from('invoices').update({ status: 'Paid' }).eq('id', invoice_id).eq('tenant_id', req.tenant.id);
+  }
+  res.status(201).json(payment);
 });
 
-// ---------- FEE TYPES ----------
+// ======================== STUDENT PAYMENT SUMMARY & OUTSTANDING ========================
+app.get('/api/students/:id/payments-summary', authMiddleware, async (req, res) => {
+  const { data, error } = await supabase.from('payments')
+    .select('amount')
+    .eq('student_id', req.params.id)
+    .eq('tenant_id', req.tenant.id);
+  if (error) return res.status(500).json({ error: error.message });
+  const total = (data || []).reduce((s, p) => s + parseFloat(p.amount), 0);
+  res.json({ total_paid: total, payments_count: data.length });
+});
+
+app.get('/api/students/:id/outstanding', authMiddleware, async (req, res) => {
+  const { data: invoices } = await supabase.from('invoices')
+    .select('total_amount, status')
+    .eq('student_id', req.params.id)
+    .eq('tenant_id', req.tenant.id);
+  const unpaid = (invoices || []).filter(inv => inv.status !== 'Paid');
+  const totalOutstanding = unpaid.reduce((s, inv) => s + parseFloat(inv.total_amount), 0);
+  res.json({ outstanding: totalOutstanding, unpaid_count: unpaid.length });
+});
+
+// ======================== TRANSFER & EXPEL ========================
+app.put('/api/enrollments/:id/transfer', authMiddleware, async (req, res) => {
+  const { new_class, new_section, new_tenant_id } = req.body;
+  const updateData = {};
+  if (new_class) updateData.class = new_class;
+  if (new_section !== undefined) updateData.section = new_section;
+  if (new_tenant_id) updateData.tenant_id = new_tenant_id;
+  const { data, error } = await supabase.from('students')
+    .update(updateData)
+    .eq('id', req.params.id)
+    .eq('tenant_id', req.tenant.id)
+    .select('*')
+    .single();
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data);
+});
+
+app.put('/api/enrollments/:id/expel', authMiddleware, async (req, res) => {
+  const { data, error } = await supabase.from('students')
+    .update({ status: 'Expelled' })
+    .eq('id', req.params.id)
+    .eq('tenant_id', req.tenant.id)
+    .select('*')
+    .single();
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data);
+});
+
+// ======================== FEE TYPES ========================
 app.get('/api/fee-types', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('fee_types').select('*').eq('tenant_id', req.tenant.id);
   if (error) return res.status(500).json({ error: error.message });
-  if (!data.length) {
-    const defaults = [{name:'Tuition',description:'Termly tuition fee',default_amount:1500,mandatory:true},{name:'Boarding',description:'Boarding fee per term',default_amount:2000,mandatory:false},{name:'Transport',description:'Bus transport fee',default_amount:300,mandatory:false}];
-    await supabase.from('fee_types').insert(defaults.map(f=>({...f,tenant_id:req.tenant.id})));
-    const { data: newData } = await supabase.from('fee_types').select('*').eq('tenant_id', req.tenant.id);
-    return res.json(newData);
-  }
   res.json(data);
 });
+
 app.post('/api/fee-types', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('fee_types').insert({...req.body, tenant_id: req.tenant.id}).select('*').single();
   if (error) return res.status(400).json({ error: 'Could not save fee type.' });
   res.status(201).json(data);
 });
+
 app.delete('/api/fee-types/:id', authMiddleware, async (req, res) => {
   await supabase.from('fee_types').delete().eq('id', req.params.id);
   res.json({ success: true });
 });
 
-// ---------- ANNOUNCEMENTS ----------
+// ======================== ANNOUNCEMENTS ========================
 app.get('/api/announcements', authMiddleware, async (req, res) => {
   let q = supabase.from('announcements').select('*').eq('tenant_id', req.tenant.id);
   if (req.query.audience) q = q.or(`target_audience.eq.${req.query.audience},target_audience.eq.All`);
@@ -436,6 +462,7 @@ app.get('/api/announcements', authMiddleware, async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
+
 app.post('/api/announcements', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('announcements').insert({
     tenant_id: req.tenant.id, title: req.body.title, message: req.body.message,
@@ -446,203 +473,32 @@ app.post('/api/announcements', authMiddleware, async (req, res) => {
   res.status(201).json(data);
 });
 
-// ---------- MONITORING ----------
-app.get('/api/monitoring', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase.from('monitoring').select('*').eq('tenant_id', req.tenant.id);
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-app.post('/api/monitoring', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase.from('monitoring').insert({...req.body, tenant_id: req.tenant.id}).select('*').single();
-  if (error) return res.status(400).json({ error: 'Could not save monitoring record.' });
-  res.status(201).json(data);
-});
-
-// ---------- RESULTS ----------
-app.get('/api/results', authMiddleware, async (req, res) => {
-  let q = supabase.from('results').select('*').eq('tenant_id', req.tenant.id);
-  if (req.query.assessment_id) q = q.eq('assessment_id', req.query.assessment_id);
-  if (req.query.class_name) {
-    const { data: studs } = await supabase.from('students').select('id').eq('class', req.query.class_name).eq('tenant_id', req.tenant.id);
-    const ids = (studs||[]).map(s => s.id);
-    if (ids.length) q = q.in('student_id', ids); else return res.json([]);
+// ======================== MONITORING ========================
+app.get('/api/monitoring', authMiddleware, async (req, res) => {  try {    const { count: totalStudents } = await supabase.from('students').select('*', { count: 'exact', head: true }).eq('tenant_id', req.tenant.id) || {};    const { count: totalStaff } = await supabase.from('staff').select('*', { count: 'exact', head: true }).eq('tenant_id', req.tenant.id) || {};    const { count: totalClasses } = await supabase.from('classes').select('*', { count: 'exact', head: true }).eq('tenant_id', req.tenant.id) || {};    const { count: totalCommittees } = await supabase.from('committees').select('*', { count: 'exact', head: true }).eq('tenant_id', req.tenant.id) || {};    const { data: payments } = await supabase.from('payments').select('amount').eq('tenant_id', req.tenant.id) || {};    const totalFees = (payments || []).reduce((s, p) => s + parseFloat(p.amount), 0);    const { data: recent } = await supabase.from('students').select('admission_no, first_name, last_name, enrollment_date').eq('tenant_id', req.tenant.id).order('created_at', { ascending: false }).limit(5) || {};    res.json({      stats: {        totalStudents: totalStudents || 0,        totalStaff: totalStaff || 0,        totalClasses: totalClasses || 0,        totalCommittees: totalCommittees || 0,        totalFees      },      classStudentCounts: [],      recentEnrollments: recent || []    });  } catch (err) {    console.error('Monitoring error:', err);    res.status(500).json({ error: 'Failed to load monitoring data' });  }});
+app.get('/api/classes/student-counts', authMiddleware, async (req, res) => {
+  const { data: classes } = await supabase.from('classes').select('name').eq('tenant_id', req.tenant.id);
+  const counts = {};
+  if (classes) {
+    for (const c of classes) {
+      const { count } = await supabase.from('students').select('*', { count: 'exact', head: true }).eq('class', c.name).eq('tenant_id', req.tenant.id);
+      counts[c.name] = count || 0;
+    }
   }
-  const { data, error } = await q;
+  res.json(counts);
+});
+app.get('/api/enrollments/class-summary', authMiddleware, async (req, res) => {
+  const { data: students, error } = await supabase.from('students')
+    .select('class, section')
+    .eq('tenant_id', req.tenant.id);
   if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  const classMap = {};
+  (students || []).forEach(s => {
+    const key = (s.class || 'Unassigned') + '||' + (s.section || '');
+    if (!classMap[key]) classMap[key] = { name: s.class || 'Unassigned', section: s.section || '', count: 0 };
+    classMap[key].count++;
+  });
+  const summary = Object.values(classMap).sort((a, b) => a.name.localeCompare(b.name));
+  res.json(summary);
 });
-app.post('/api/results', authMiddleware, async (req, res) => {
-  const { student_id, assessment_id, score } = req.body;
-  const { data: existing } = await supabase.from('results').select('*').eq('student_id', student_id).eq('assessment_id', assessment_id).maybeSingle();
-  if (existing) {
-    const { data, error } = await supabase.from('results').update({ score }).eq('id', existing.id).select('*').single();
-    if (error) return res.status(400).json({ error: 'Could not update result.' });
-    return res.json(data);
-  }
-  const { data, error } = await supabase.from('results').insert({ tenant_id: req.tenant.id, student_id, assessment_id, score }).select('*').single();
-  if (error) return res.status(400).json({ error: 'Could not save result.' });
-  res.status(201).json(data);
-});
-
-// ---------- TIMETABLE ----------
-app.post('/api/timetables/school', authMiddleware, async (req, res) => {
-  await supabase.from('timetables').delete().eq('tenant_id', req.tenant.id).eq('term', req.body.term);
-  const entries = req.body.entries.map(e => ({ tenant_id: req.tenant.id, class_name: e.class_name, term: req.body.term, day: e.day, period: e.period, subject: e.subject, teacher_id: e.teacher_id }));
-  const { data, error } = await supabase.from('timetables').insert(entries).select('*');
-  if (error) return res.status(400).json({ error: 'Could not save timetable.' });
-  res.status(201).json(data);
-});
-app.get('/api/timetables/school/:term', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase.from('timetables').select('*').eq('tenant_id', req.tenant.id).eq('term', req.params.term);
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
-// ---------- DUTY ROTA ----------
-app.get('/api/duty-rota', authMiddleware, async (req, res) => {
-  let q = supabase.from('duty_rota').select('*').eq('tenant_id', req.tenant.id);
-  if (req.query.term) q = q.eq('term', req.query.term);
-  const { data, error } = await q;
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-app.post('/api/duty-rota', authMiddleware, async (req, res) => {
-  await supabase.from('duty_rota').delete().eq('tenant_id', req.tenant.id).eq('term', req.body.term);
-  const entries = req.body.assignments.map(a => ({ tenant_id: req.tenant.id, term: req.body.term, week_start: a.week_start, hod_id: a.hod_id, teacher_ids: a.teacher_ids||[] }));
-  const { data, error } = await supabase.from('duty_rota').insert(entries).select('*');
-  if (error) return res.status(400).json({ error: 'Could not save duty rota.' });
-  res.status(201).json(data);
-});
-
-// ---------- CPD ----------
-app.get('/api/cpds', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase.from('cpds').select('*').eq('tenant_id', req.tenant.id);
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-app.post('/api/cpds', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase.from('cpds').insert({
-    tenant_id: req.tenant.id, topic: req.body.topic, facilitator_id: req.body.facilitator_id,
-    attendee_ids: req.body.attendee_ids||[], class_room: req.body.class_room||'',
-    date_time: req.body.date_time, records: req.body.records||''
-  }).select('*').single();
-  if (error) return res.status(400).json({ error: 'Could not save CPD event.' });
-  res.status(201).json(data);
-});
-
-// ---------- MATERIALS ----------
-app.get('/api/materials', authMiddleware, async (req, res) => {
-  let q = supabase.from('materials').select('*').eq('tenant_id', req.tenant.id);
-  if (req.query.class_name) q = q.eq('class_name', req.query.class_name);
-  if (req.query.teacher_id) q = q.eq('teacher_id', req.query.teacher_id);
-  const { data, error } = await q;
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-app.post('/api/materials', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase.from('materials').insert({
-    tenant_id: req.tenant.id, teacher_id: req.body.teacher_id, class_name: req.body.class_name,
-    title: req.body.title, description: req.body.description||'', type: req.body.type||'Notes',
-    price: parseFloat(req.body.price)||0, url: req.body.url||''
-  }).select('*').single();
-  if (error) return res.status(400).json({ error: 'Could not save material.' });
-  res.status(201).json(data);
-});
-
-// ---------- LIBRARY ----------
-let libraryBooks = [
-  { id:'lib1', title:'The Great Gatsby', author:'F. Scott Fitzgerald', isbn:'978-0743273565', category:'Fiction', quantity:5, available:3, item_type:'book', created_at:new Date().toISOString() },
-  { id:'lib2', title:'To Kill a Mockingbird', author:'Harper Lee', isbn:'978-0061120084', category:'Fiction', quantity:3, available:2, item_type:'book', created_at:new Date().toISOString() },
-  { id:'lib3', title:'Bible (Good News)', author:'', isbn:'', category:'Religion', quantity:10, available:10, item_type:'bible', created_at:new Date().toISOString() },
-  { id:'lib4', title:'Atlas of the World', author:'National Geographic', isbn:'978-1426215934', category:'Reference', quantity:5, available:5, item_type:'atlas', created_at:new Date().toISOString() }
-];
-let libraryTransactions = [];
-app.get('/api/library/books', authMiddleware, (req, res) => {
-  let result = libraryBooks;
-  if (req.query.search) { const q=req.query.search.toLowerCase(); result=result.filter(b=>b.title.toLowerCase().includes(q)||(b.author||'').toLowerCase().includes(q)||(b.isbn||'').includes(q)); }
-  if (req.query.category) result=result.filter(b=>b.category===req.query.category);
-  if (req.query.item_type) result=result.filter(b=>b.item_type===req.query.item_type);
-  res.json(result);
-});
-app.post('/api/library/books', authMiddleware, (req, res) => {
-  const newItem = {
-    id:'lib'+Date.now(), title:req.body.title, author:req.body.author||'', isbn:req.body.isbn||'',
-    category:req.body.category||'General', item_type:req.body.item_type||'book',
-    quantity:parseInt(req.body.quantity)||1, available:parseInt(req.body.quantity)||1,
-    subject:req.body.subject||'', year:req.body.year||'', exam_type:req.body.exam_type||'',
-    created_at:new Date().toISOString()
-  };
-  libraryBooks.push(newItem);
-  res.status(201).json(newItem);
-});
-app.put('/api/library/books/:id', authMiddleware, (req, res) => {
-  const idx = libraryBooks.findIndex(b=>b.id===req.params.id);
-  if(idx===-1) return res.status(404).json({error:'Item not found'});
-  const updated = {...libraryBooks[idx], ...req.body};
-  if(req.body.quantity!==undefined){ const borrowed=libraryBooks[idx].quantity-libraryBooks[idx].available; updated.available=Math.max(0,parseInt(req.body.quantity)-borrowed); }
-  libraryBooks[idx]=updated;
-  res.json(updated);
-});
-app.delete('/api/library/books/:id', authMiddleware, (req, res) => {
-  libraryBooks = libraryBooks.filter(b=>b.id!==req.params.id);
-  res.json({success:true});
-});
-app.get('/api/library/transactions', authMiddleware, (req, res) => {
-  let result = libraryTransactions;
-  if(req.query.status) result=result.filter(t=>t.status===req.query.status);
-  if(req.query.borrower_id) result=result.filter(t=>t.borrower_id===req.query.borrower_id);
-  res.json(result);
-});
-app.post('/api/library/borrow', authMiddleware, (req, res) => {
-  const {book_id, borrower_id, borrower_name, borrower_type} = req.body;
-  const book = libraryBooks.find(b=>b.id===book_id);
-  if(!book) return res.status(404).json({error:'Item not found'});
-  if(book.available<=0) return res.status(400).json({error:'No copies available'});
-  const dueDate = new Date(); dueDate.setDate(dueDate.getDate()+14);
-  const txn = {
-    id:'libtxn'+Date.now(), book_id:book.id, book_title:book.title,
-    borrower_id:borrower_id||'guest', borrower_name:borrower_name||'Unknown', borrower_type:borrower_type||'student',
-    borrow_date:new Date().toISOString().split('T')[0], due_date:dueDate.toISOString().split('T')[0],
-    return_date:null, status:'borrowed'
-  };
-  libraryTransactions.push(txn);
-  book.available--;
-  res.status(201).json(txn);
-});
-app.put('/api/library/return/:id', authMiddleware, (req, res) => {
-  const txn = libraryTransactions.find(t=>t.id===req.params.id);
-  if(!txn) return res.status(404).json({error:'Transaction not found'});
-  txn.return_date = new Date().toISOString().split('T')[0];
-  txn.status = 'returned';
-  const dueDate = new Date(txn.due_date), returnDate = new Date(txn.return_date);
-  const overdue = returnDate > dueDate;
-  const book = libraryBooks.find(b=>b.id===txn.book_id);
-  if(book) book.available++;
-  res.json({...txn, overdue});
-});
-app.get('/api/library/overdue', authMiddleware, (req, res) => {
-  const overdue = libraryTransactions.filter(t=>t.status==='borrowed'&&new Date(t.due_date)<new Date());
-  overdue.forEach(t=>{ const dueDate=new Date(t.due_date); t.days_overdue=Math.ceil((new Date()-dueDate)/(1000*60*60*24)); });
-  res.json(overdue);
-});
-app.get('/api/library/stats', authMiddleware, (req, res) => {
-  const totalItems = libraryBooks.reduce((sum,b)=>sum+b.quantity,0);
-  const borrowedItems = libraryTransactions.filter(t=>t.status==='borrowed').length;
-  const overdueItems = libraryTransactions.filter(t=>t.status==='borrowed'&&new Date(t.due_date)<new Date()).length;
-  res.json({totalItems, borrowedItems, overdueItems});
-});
-
-// ---------- PROFILE PICTURES ----------
-app.put('/api/staff/:id/profile-picture', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase.from('staff').update({ profile_picture: req.body.profile_picture||'', first_name: req.body.first_name, last_name: req.body.last_name, phone: req.body.phone, email: req.body.email }).eq('id', req.params.id).select('*').single();
-  if (error) return res.status(404).json({ error: 'Staff not found.' });
-  res.json(data);
-});
-app.put('/api/enrollments/:id/profile-picture', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase.from('students').update({ profile_picture: req.body.profile_picture||'', first_name: req.body.first_name, last_name: req.body.last_name, phone: req.body.phone, email: req.body.email }).eq('id', req.params.id).select('*').single();
-  if (error) return res.status(404).json({ error: 'Student not found.' });
-  res.json(data);
-});
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('Server running on http://localhost:' + PORT));

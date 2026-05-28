@@ -1,5 +1,292 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Student – Bwanali</title><link rel="stylesheet" href="/style.css"></head><body data-page="student"><script src="/shared.js"></script><script>
-document.addEventListener("DOMContentLoaded",async function(){
-  document.getElementById("page-content").innerHTML = '<div class="module-header"><h2>👥 Student Profile</h2></div><p>Select a student from the enrollment list to view details.</p>';
-});
-</script></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Student Profile – Bwanali</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', sans-serif; background: #f1f5f9; color: #1e293b; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 1rem; }
+    .profile-header { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem; }
+    .profile-header h2 { font-size: clamp(1.3rem, 5vw, 1.8rem); color: #0f172a; }
+    .new-badge { background: #10b981; color: white; font-size: 0.7rem; padding: 0.25em 0.75em; border-radius: 100px; white-space: nowrap; }
+    .profile-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; margin-bottom: 2rem; }
+    .card { background: #fff; border-radius: 1rem; padding: 1.25rem; box-shadow: 0 4px 12px rgba(0,0,0,0.04); }
+    .card h3 { font-size: 1rem; font-weight: 600; margin-bottom: 0.75rem; color: #0f172a; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.5rem; }
+    .photo-area { display: flex; flex-direction: column; align-items: center; }
+    .profile-pic { width: 120px; height: 120px; border-radius: 50%; object-fit: cover; border: 3px solid #e2e8f0; margin-bottom: 1rem; }
+    .upload-form { width: 100%; margin-top: 0.5rem; }
+    .upload-form input[type="file"] { margin-bottom: 0.75rem; font-size: 0.9rem; }
+    .upload-form input[type="text"] { width: 100%; padding: 0.6em 0.8em; border: 1px solid #cbd5e1; border-radius: 0.5rem; margin-bottom: 0.5rem; }
+    table { width: 100%; border-collapse: collapse; }
+    tr { border-bottom: 1px solid #f1f5f9; }
+    td { padding: 0.6rem 0.4rem; font-size: 0.9rem; }
+    td:first-child { font-weight: 500; color: #475569; width: 40%; }
+    .payment-summary p { margin: 0.5rem 0; font-size: 1rem; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.4em; padding: 0.7em 1.2em; border: none; border-radius: 0.6rem; font-weight: 500; font-size: 0.9rem; cursor: pointer; transition: background 0.2s, transform 0.1s; text-decoration: none; color: white; margin-top: 0.5rem; }
+    .btn:active { transform: scale(0.98); }
+    .btn-primary { background: #1e3c72; }
+    .btn-primary:hover { background: #16305c; }
+    .btn-secondary { background: #e2e8f0; color: #1e293b; }
+    .btn-secondary:hover { background: #cbd5e1; }
+    .btn-purple { background: #8b5cf6; }
+    .btn-purple:hover { background: #7c3aed; }
+    .btn-danger { background: #ef4444; }
+    .btn-danger:hover { background: #dc2626; }
+    .outstanding-badge { background: #ef4444; color: white; border-radius: 100px; padding: 0.15em 0.6em; font-size: 0.75rem; margin-left: 0.3em; }
+    .back-link { display: inline-block; margin-top: 1.5rem; color: #475569; text-decoration: none; font-weight: 500; }
+    .back-link:hover { text-decoration: underline; }
+    .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+    .modal-content { background: white; border-radius: 1rem; max-width: 500px; width: 100%; max-height: 90vh; overflow-y: auto; padding: 1.5rem; position: relative; }
+    .modal-close { position: absolute; top: 0.8rem; right: 1rem; font-size: 1.5rem; cursor: pointer; color: #64748b; background: none; border: none; }
+    .form-group { margin-bottom: 1rem; }
+    .form-group label { display: block; margin-bottom: 0.25rem; font-weight: 500; font-size: 0.9rem; }
+    .form-group input { width: 100%; padding: 0.6em 0.8em; border: 1px solid #cbd5e1; border-radius: 0.5rem; font-size: 0.9rem; }
+    .form-actions { display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 1.5rem; }
+    @media screen and (max-width: 600px) {
+      .container { padding: 0.75rem; }
+      .profile-grid { grid-template-columns: 1fr; }
+      .btn { width: 100%; }
+      td { padding: 0.4rem 0.2rem; font-size: 0.85rem; }
+      .modal-content { margin: 1rem; padding: 1rem; }
+    }
+  </style>
+</head>
+<body data-page="student">
+<script src="/shared.js"></script>
+<div id="page-content" class="container"></div>
+
+<script>
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  const tenant = params.get('tenant') || 'demo';
+  const studentId = params.get('id');
+  const content = document.getElementById('page-content');
+  const token = sessionStorage.getItem('bwanali_token');
+
+  if (!token) {
+    alert('Please log in.');
+    window.location.href = '/login.html';
+    return;
+  }
+  if (!studentId) {
+    content.innerHTML = '<div class="profile-header"><h2>👥 Student Profile</h2></div><p>No student ID provided.</p>';
+    return;
+  }
+
+  async function init() {
+    const [studRes, payRes, outRes] = await Promise.all([
+      fetch('/api/enrollments/' + studentId + '?tenant=' + tenant),
+      fetch('/api/students/' + studentId + '/payments-summary?tenant=' + tenant),
+      fetch('/api/students/' + studentId + '/outstanding?tenant=' + tenant)
+    ]);
+
+    if (studRes.status === 401) {
+      alert('Session expired.');
+      window.location.href = '/login.html';
+      return;
+    }
+    if (!studRes.ok) {
+      content.innerHTML = '<p>Error loading student (' + studRes.status + ').</p>';
+      return;
+    }
+
+    const s = await studRes.json();
+    const payInfo = payRes.ok ? await payRes.json() : { total_paid: 0, payments_count: 0 };
+    const outInfo = outRes.ok ? await outRes.json() : { outstanding: 0, unpaid_count: 0 };
+
+    const enrollDate = new Date(s.enrollment_date);
+    const daysSince = Math.floor((Date.now() - enrollDate) / (1000 * 60 * 60 * 24));
+    const isNew = daysSince <= 7;
+    const hasOutstanding = outInfo.outstanding > 0;
+
+    content.innerHTML = `
+      <div class="profile-header">
+        <h2>👥 ${s.first_name} ${s.last_name}</h2>
+        ${isNew ? '<span class="new-badge">New</span>' : ''}
+      </div>
+      <div class="profile-grid">
+        <!-- Photo -->
+        <div class="card">
+          <h3>📸 Photo</h3>
+          <div class="photo-area">
+            ${s.profile_picture ? `<img src="${s.profile_picture}" alt="Profile" class="profile-pic">` : '<p>No photo added yet.</p>'}
+            <div class="upload-form">
+              <input type="file" id="profilePicFile" accept="image/*"><br>
+              <small>or paste image URL:</small>
+              <input type="text" id="profilePicUrl" placeholder="https://example.com/photo.jpg">
+              <button class="btn btn-primary" id="saveProfilePicBtn">Save Photo</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Personal Info -->
+        <div class="card">
+          <h3>🧑 Personal Information</h3>
+          <table>
+            <tr><td>Admission No</td><td>${s.admission_no}</td></tr>
+            <tr><td>Name</td><td>${s.first_name} ${s.last_name}</td></tr>
+            <tr><td>Date of Birth</td><td>${s.dob || '-'}</td></tr>
+            <tr><td>Gender</td><td>${s.gender || '-'}</td></tr>
+            <tr><td>Class</td><td>${s.class || '-'} ${s.section ? '('+s.section+')' : ''}</td></tr>
+          </table>
+        </div>
+
+        <!-- Parent -->
+        <div class="card">
+          <h3>👪 Parent / Guardian</h3>
+          <table>
+            <tr><td>Name</td><td>${s.parent_name || '-'}</td></tr>
+            <tr><td>Phone</td><td>${s.phone || '-'}</td></tr>
+            <tr><td>Email</td><td>${s.email || '-'}</td></tr>
+            <tr><td>Address</td><td>${s.address || '-'}</td></tr>
+          </table>
+        </div>
+
+        <!-- Payment -->
+        <div class="card">
+          <h3>💰 Payment Info</h3>
+          <p><strong>Total Paid:</strong> K ${payInfo.total_paid.toLocaleString()}</p>
+          <p><strong>Payments Made:</strong> ${payInfo.payments_count}</p>
+          <button class="btn btn-purple" id="payFeeBtn">💳 Process Payment ${hasOutstanding ? '<span class="outstanding-badge">K ' + outInfo.outstanding.toLocaleString() + ' unpaid</span>' : ''}</button>
+        </div>
+
+        <!-- Enrollment -->
+        <div class="card">
+          <h3>📋 Enrollment Details</h3>
+          <table>
+            <tr><td>Enrollment Date</td><td>${s.enrollment_date || '-'}</td></tr>
+            <tr><td>Previous Schools</td><td>${(s.previous_schools || []).map(p => p.name + ' (' + p.year + ')').join(', ') || 'None'}</td></tr>
+            <tr><td>Medical Notes</td><td>${s.medical_notes || '-'}</td></tr>
+            <tr><td>Special Needs</td><td>${s.special_needs || '-'}</td></tr>
+          </table>
+          <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:1rem;">
+            <button class="btn btn-secondary" id="editDetailsBtn">✏️ Edit Details</button>
+            <button class="btn btn-danger" id="deleteStudentBtn">🗑️ Delete Student</button>
+          </div>
+        </div>
+      </div>
+      <a href="/dashboard.html?tenant=${tenant}" class="back-link">← Back to Dashboard</a>
+    `;
+
+    // Event listeners
+    document.getElementById('payFeeBtn').addEventListener('click', () => {
+      window.location.href = '/pages/pay-fees-select.html?tenant=' + tenant + '&studentId=' + studentId;
+    });
+
+    document.getElementById('editDetailsBtn').addEventListener('click', () => showEditModal(s));
+
+    document.getElementById('deleteStudentBtn').addEventListener('click', async () => {
+      if (!confirm('Permanently delete this student? This cannot be undone.')) return;
+      const res = await fetch('/api/enrollments/' + studentId + '?tenant=' + tenant, { method: 'DELETE' });
+      if (res.ok) {
+        alert('Student deleted.');
+        window.location.href = '/dashboard.html?tenant=' + tenant;
+      } else {
+        const err = await res.json();
+        alert('Delete failed: ' + (err.error || 'Unknown error'));
+      }
+    });
+
+    document.getElementById('saveProfilePicBtn').addEventListener('click', async () => {
+      const fileInput = document.getElementById('profilePicFile');
+      const urlInput = document.getElementById('profilePicUrl').value.trim();
+      let picUrl = '';
+      if (fileInput.files.length > 0) {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          picUrl = e.target.result;
+          await updatePicture(picUrl);
+        };
+        reader.readAsDataURL(fileInput.files[0]);
+        return;
+      } else if (urlInput) {
+        picUrl = urlInput;
+        await updatePicture(picUrl);
+      } else {
+        alert('Please select a file or enter a URL.');
+      }
+    });
+
+    async function updatePicture(picUrl) {
+      const res = await fetch('/api/enrollments/' + studentId + '/profile-picture?tenant=' + tenant, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile_picture: picUrl, first_name: s.first_name, last_name: s.last_name, phone: s.phone, email: s.email })
+      });
+      if (res.ok) {
+        alert('Profile picture updated!');
+        window.location.reload();
+      } else {
+        let errMsg = 'Could not update picture.';
+        try { const err = await res.json(); errMsg = err.error || errMsg; } catch(e) {}
+        alert('Error: ' + errMsg);
+      }
+    }
+
+    function showEditModal(s) {
+      const modal = document.createElement('div');
+      modal.className = 'modal';
+      modal.innerHTML = `
+        <div class="modal-content">
+          <button class="modal-close">&times;</button>
+          <h3>Edit Student Details</h3>
+          <form id="editStudentForm">
+            <div class="form-group"><label>First Name</label><input type="text" id="editFirstName" value="${s.first_name}" required></div>
+            <div class="form-group"><label>Last Name</label><input type="text" id="editLastName" value="${s.last_name}" required></div>
+            <div class="form-group"><label>Class</label><input type="text" id="editClass" value="${s.class}"></div>
+            <div class="form-group"><label>Section</label><input type="text" id="editSection" value="${s.section || ''}"></div>
+            <div class="form-group"><label>Parent Name</label><input type="text" id="editParentName" value="${s.parent_name || ''}"></div>
+            <div class="form-group"><label>Phone</label><input type="text" id="editPhone" value="${s.phone || ''}"></div>
+            <div class="form-group"><label>Email</label><input type="email" id="editEmail" value="${s.email || ''}"></div>
+            <div class="form-group"><label>Address</label><input type="text" id="editAddress" value="${s.address || ''}"></div>
+            <div class="form-actions">
+              <button type="button" class="btn btn-secondary" id="cancelEditBtn">Cancel</button>
+              <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+          </form>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      const closeModal = () => modal.remove();
+      modal.querySelector('.modal-close').addEventListener('click', closeModal);
+      modal.querySelector('#cancelEditBtn').addEventListener('click', closeModal);
+      modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+      modal.querySelector('#editStudentForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const data = {
+          firstName: document.getElementById('editFirstName').value,
+          lastName: document.getElementById('editLastName').value,
+          className: document.getElementById('editClass').value,
+          section: document.getElementById('editSection').value,
+          parentName: document.getElementById('editParentName').value,
+          phone: document.getElementById('editPhone').value,
+          email: document.getElementById('editEmail').value,
+          address: document.getElementById('editAddress').value
+        };
+        const res = await fetch('/api/enrollments/' + studentId + '?tenant=' + tenant, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        if (res.ok) {
+          alert('Details updated!');
+          modal.remove();
+          window.location.reload();
+        } else {
+          const err = await res.json();
+          alert('Error: ' + (err.error || 'Could not update'));
+        }
+      });
+    }
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

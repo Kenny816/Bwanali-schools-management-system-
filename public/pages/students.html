@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Students – Bwanali</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .students-container { padding: 20px; max-width: 1400px; margin: 0 auto; }
+    .search-bar { margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .search-bar input { flex: 1; min-width: 200px; padding: 10px; border: 1px solid #ced4da; border-radius: 6px; }
+    .pagination { margin-top: 20px; display: flex; gap: 10px; justify-content: center; align-items: center; }
+    .pagination button { padding: 8px 16px; border: 1px solid #dee2e6; background: #fff; border-radius: 6px; cursor: pointer; }
+    .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .pagination span { font-weight: 600; }
+    .action-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+    .action-btns button { padding: 4px 10px; font-size: 0.85rem; border-radius: 4px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    .action-btns .preview { color: #1e3c72; border-color: #1e3c72; }
+    .action-btns .transfer { color: #e67e22; border-color: #e67e22; }
+    .action-btns .change-class { color: #2ecc71; border-color: #2ecc71; }
+    .action-btns .expel { color: #e74c3c; border-color: #e74c3c; }
+
+    /* Responsive table */
+    @media screen and (max-width: 768px) {
+      .data-table thead { display: none; }
+      .data-table, .data-table tbody, .data-table tr, .data-table td {
+        display: block; width: 100%;
+      }
+      .data-table tr {
+        margin-bottom: 15px; border: 1px solid #dee2e6; border-radius: 8px;
+        background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); padding: 10px;
+      }
+      .data-table td {
+        text-align: right; padding: 6px 10px; position: relative; border-bottom: 1px solid #eee;
+      }
+      .data-table td:last-child { border-bottom: none; }
+      .data-table td::before {
+        content: attr(data-label); float: left; font-weight: 600; color: #495057;
+      }
+    }
+  </style>
+</head>
+<body data-page="students">
+<script src="/shared.js"></script>
+<div id="page-content"></div>
+
+<script>
+document.addEventListener("DOMContentLoaded", async function() {
+  const params = new URLSearchParams(window.location.search);
+  const tenant = params.get('tenant') || 'demo';
+  const token = sessionStorage.getItem('bwanali_token');
+  if (!token) { window.location.href = '/login.html'; return; }
+
+  let currentPage = 1;
+  const limit = 20;
+  let searchTerm = '';
+  let totalStudents = 0;
+
+  const content = document.getElementById('page-content');
+
+  function buildPage() {
+    content.innerHTML = `
+      <div class="students-container">
+        <div class="module-header"><h2>👥 All Students</h2></div>
+        <div class="search-bar">
+          <input type="text" id="searchInput" placeholder="Search by name or admission number...">
+          <button class="btn-primary" id="searchBtn">Search</button>
+        </div>
+        <div class="table-container">
+          <table class="data-table" id="studentsTable">
+            <thead>
+              <tr>
+                <th>Adm No</th><th>Name</th><th>Class</th><th>Section</th><th>Parent</th><th>Phone</th><th>Status</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="pagination" id="pagination"></div>
+      </div>
+      <!-- Transfer/Change Class Modal -->
+      <div class="modal" id="transferModal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+          <span class="modal-close" id="closeTransferModal">&times;</span>
+          <h3 id="transferModalTitle">Transfer Student</h3>
+          <form id="transferForm">
+            <input type="hidden" id="transferStudentId">
+            <div class="form-group">
+              <label>New Class</label>
+              <select id="transferClass" required>
+                <option value="">Select class</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>New Section (optional)</label>
+              <input type="text" id="transferSection">
+            </div>
+            <div id="tenantGroup" style="display:none;">
+              <div class="form-group">
+                <label>Transfer to School (admin only)</label>
+                <select id="transferTenant"></select>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button type="button" class="btn-secondary" id="cancelTransferBtn">Cancel</button>
+              <button type="submit" class="btn-primary">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+
+    // Show tenant field only for admins
+    const user = JSON.parse(sessionStorage.getItem('bwanali_user') || '{}');
+    if (user.role === 'admin') {
+      document.getElementById('tenantGroup').style.display = 'block';
+      loadTenants();
+    }
+    loadClasses();
+    attachEvents();
+    loadStudents();
+  }
+
+  async function loadTenants() {
+    try {
+      const res = await fetch(`/api/tenants?tenant=${tenant}`);
+      const tenants = await res.json();
+      const select = document.getElementById('transferTenant');
+      select.innerHTML = '<option value="">Same School</option>';
+      tenants.forEach(t => {
+        select.innerHTML += `<option value="${t.id}">${t.name}</option>`;
+      });
+    } catch(e) {}
+  }
+
+  async function loadClasses() {
+    try {
+      const res = await fetch(`/api/classes?tenant=${tenant}`);
+      const result = await res.json();
+      const classes = result.data || result;
+      const select = document.getElementById('transferClass');
+      select.innerHTML = '<option value="">Select class</option>';
+      classes.forEach(c => {
+        select.innerHTML += `<option value="${c.name}">${c.name} ${c.section ? '('+c.section+')' : ''}</option>`;
+      });
+    } catch(e) {}
+  }
+
+  function attachEvents() {
+    document.getElementById('searchBtn').addEventListener('click', () => {
+      searchTerm = document.getElementById('searchInput').value.trim();
+      currentPage = 1;
+      loadStudents();
+    });
+    document.getElementById('searchInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        searchTerm = e.target.value.trim();
+        currentPage = 1;
+        loadStudents();
+      }
+    });
+    document.getElementById('closeTransferModal').addEventListener('click', () => {
+      document.getElementById('transferModal').style.display = 'none';
+    });
+    document.getElementById('cancelTransferBtn').addEventListener('click', () => {
+      document.getElementById('transferModal').style.display = 'none';
+    });
+    document.getElementById('transferForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const studentId = document.getElementById('transferStudentId').value;
+      const newClass = document.getElementById('transferClass').value;
+      const newSection = document.getElementById('transferSection').value;
+      const newTenantId = document.getElementById('transferTenant')?.value || null;
+
+      const body = { new_class: newClass, new_section: newSection };
+      if (newTenantId) body.new_tenant_id = newTenantId;
+
+      const res = await fetch(`/api/enrollments/${studentId}/transfer?tenant=${tenant}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (res.ok) {
+        document.getElementById('transferModal').style.display = 'none';
+        loadStudents();
+      } else {
+        const err = await res.json();
+        alert('Transfer failed: ' + (err.error || 'Unknown error'));
+      }
+    });
+  }
+
+  async function loadStudents() {
+    const tbody = document.querySelector('#studentsTable tbody');
+    tbody.innerHTML = '<tr><td colspan="8" class="text-muted">Loading...</td></tr>';
+    try {
+      const url = `/api/enrollments?tenant=${tenant}&page=${currentPage}&limit=${limit}&search=${encodeURIComponent(searchTerm)}`;
+      const res = await fetch(url);
+      const result = await res.json();
+      const students = result.data || result;
+      totalStudents = result.total || students.length;
+
+      tbody.innerHTML = '';
+      if (!students.length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-muted">No students found.</td></tr>';
+        renderPagination();
+        return;
+      }
+
+      students.forEach(s => {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td data-label="Adm No">${s.admission_no}</td>
+          <td data-label="Name">${s.first_name} ${s.last_name}</td>
+          <td data-label="Class">${s.class || '-'}</td>
+          <td data-label="Section">${s.section || '-'}</td>
+          <td data-label="Parent">${s.parent_name || '-'}</td>
+          <td data-label="Phone">${s.phone || '-'}</td>
+          <td data-label="Status">${s.status || 'Active'}</td>
+          <td data-label="Actions" class="action-btns">
+            <button class="preview" data-id="${s.id}">👁 Preview</button>
+            <button class="transfer" data-id="${s.id}">🔄 Transfer</button>
+            <button class="change-class" data-id="${s.id}">📚 Change Class</button>
+            <button class="expel" data-id="${s.id}">🚫 Expel</button>
+          </td>`;
+        tbody.appendChild(row);
+      });
+
+      // Attach action handlers
+      document.querySelectorAll('.preview').forEach(btn => {
+        btn.addEventListener('click', () => {
+          window.location.href = `/pages/student.html?tenant=${tenant}&id=${btn.dataset.id}`;
+        });
+      });
+      document.querySelectorAll('.transfer').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.getElementById('transferStudentId').value = btn.dataset.id;
+          document.getElementById('transferModalTitle').innerText = 'Transfer Student';
+          document.getElementById('transferModal').style.display = 'block';
+        });
+      });
+      document.querySelectorAll('.change-class').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const newClass = prompt('Enter new class name:');
+          if (!newClass) return;
+          const newSection = prompt('Enter new section (optional):') || '';
+          const res = await fetch(`/api/enrollments/${btn.dataset.id}/transfer?tenant=${tenant}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ new_class: newClass, new_section: newSection })
+          });
+          if (res.ok) loadStudents();
+          else alert('Failed to change class.');
+        });
+      });
+      document.querySelectorAll('.expel').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Are you sure you want to expel this student? This action cannot be undone.')) return;
+          const res = await fetch(`/api/enrollments/${btn.dataset.id}/expel?tenant=${tenant}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (res.ok) loadStudents();
+          else alert('Expulsion failed.');
+        });
+      });
+
+      renderPagination();
+    } catch(e) {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-muted">Error loading students.</td></tr>';
+    }
+  }
+
+  function renderPagination() {
+    const totalPages = Math.ceil(totalStudents / limit);
+    const container = document.getElementById('pagination');
+    container.innerHTML = `
+      <button id="prevBtn" ${currentPage <= 1 ? 'disabled' : ''}>← Previous</button>
+      <span>Page ${currentPage} of ${totalPages}</span>
+      <button id="nextBtn" ${currentPage >= totalPages ? 'disabled' : ''}>Next →</button>
+    `;
+    document.getElementById('prevBtn').addEventListener('click', () => {
+      if (currentPage > 1) { currentPage--; loadStudents(); }
+    });
+    document.getElementById('nextBtn').addEventListener('click', () => {
+      if (currentPage < totalPages) { currentPage++; loadStudents(); }
+    });
+  }
+
+  buildPage();
+});
+</script>
+</body>
+</html>

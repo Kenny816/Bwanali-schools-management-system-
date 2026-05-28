@@ -1,5 +1,260 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Pay Fees – Bwanali</title><link rel="stylesheet" href="/style.css"></head><body data-page="pay-fees"><script src="/shared.js"></script><script>
-document.addEventListener("DOMContentLoaded",function(){
-  document.getElementById("page-content").innerHTML = '<div class="module-header"><h2>Make Payment</h2></div><p>Select a student to pay fees.</p>';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Pay Fees – Bwanali</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .skip-btn { margin-left: 10px; }
+    .payment-container { max-width: 600px; margin: 0 auto; }
+    .form-group { margin-bottom: 15px; }
+    .form-group label { display: block; margin-bottom: 4px; font-weight: 600; }
+    .form-group select, .form-group input { width: 100%; padding: 8px; }
+    .btn-primary, .btn-secondary { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; }
+    .btn-primary { background: #1e3c72; color: white; }
+    .btn-secondary { background: #ccc; color: #333; }
+    .invoice-list { margin: 15px 0; }
+    .invoice-list table { width: 100%; border-collapse: collapse; }
+    .invoice-list th, .invoice-list td { padding: 6px 8px; border-bottom: 1px solid #ddd; text-align: left; }
+    .student-info { background: #f0f4ff; padding: 12px; border-radius: 8px; margin-bottom: 20px; }
+    .student-info h3 { margin:0 0 5px 0; }
+    .error-msg { color: red; margin: 10px 0; }
+  </style>
+</head>
+<body data-page="pay-fees">
+<script src="/shared.js"></script>
+<div id="page-content"></div>
+
+<script>
+document.addEventListener("DOMContentLoaded", async function() {
+  const params = new URLSearchParams(window.location.search);
+  const tenant = params.get('tenant') || 'demo';
+  const studentIdParam = params.get('studentId') || '';
+
+  const content = document.getElementById('page-content');
+  const token = sessionStorage.getItem('bwanali_token');
+
+  if (!token) {
+    content.innerHTML = '<p style="color:red;">You must be logged in. <a href="/login.html">Login</a></p>';
+    return;
+  }
+
+  // This student ID is always up‑to‑date (from URL or dropdown)
+  let activeStudentId = studentIdParam;
+
+  // The only redirect function – works for Skip and Payment
+  function goToProfile() {
+    if (activeStudentId) {
+      // Use replace to avoid back‑button issues
+      window.location.replace(`/pages/student.html?tenant=${tenant}&id=${activeStudentId}`);
+    } else {
+      window.location.replace(`/dashboard.html?tenant=${tenant}`);
+    }
+  }
+
+  // Build UI
+  content.innerHTML = `
+    <div class="module-header"><h2>Make Payment</h2></div>
+    <div class="payment-container">
+      <div id="studentInfoArea"></div>
+      <div class="form-group" id="studentDropdownGroup">
+        <label>Select Student</label>
+        <select id="studentSelect"><option value="">-- Choose a student --</option></select>
+      </div>
+      <div id="invoicesArea"></div>
+      <div id="paymentForm" style="display:none; margin-top:20px;">
+        <h3>Record Payment</h3>
+        <div class="form-group">
+          <label>Amount (K)</label>
+          <input type="number" id="paymentAmount" placeholder="Enter amount">
+        </div>
+        <div class="form-group">
+          <label>Payment Method</label>
+          <select id="paymentMethod">
+            <option value="Cash">Cash</option>
+            <option value="Bank Transfer">Bank Transfer</option>
+            <option value="Mobile Money">Mobile Money</option>
+            <option value="Cheque">Cheque</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Remarks</label>
+          <input type="text" id="paymentRemarks" placeholder="Optional note">
+        </div>
+        <button class="btn-primary" id="recordPaymentBtn">Submit Payment</button>
+        <button class="btn-secondary skip-btn" id="skipBtn">Skip</button>
+      </div>
+      <div style="margin-top:20px;">
+        <button class="btn-secondary skip-btn" id="skipBtnBottom">Skip</button>
+      </div>
+    </div>
+  `;
+
+  // Attach Skip handlers directly to goToProfile
+  document.getElementById('skipBtn').addEventListener('click', goToProfile);
+  document.getElementById('skipBtnBottom').addEventListener('click', goToProfile);
+
+  // If studentId provided, auto‑load
+  if (studentIdParam) {
+    document.getElementById('studentDropdownGroup').style.display = 'none';
+    try {
+      const studRes = await fetch(`/api/enrollments/${studentIdParam}?tenant=${tenant}`);
+      if (studRes.ok) {
+        const student = await studRes.json();
+        showStudentInfo(student);
+        loadInvoices(studentIdParam);
+      } else {
+        document.getElementById('studentDropdownGroup').style.display = 'block';
+        loadStudentDropdown();
+      }
+    } catch(e) {
+      document.getElementById('studentDropdownGroup').style.display = 'block';
+      loadStudentDropdown();
+    }
+  } else {
+    loadStudentDropdown();
+  }
+
+  function showStudentInfo(student) {
+    document.getElementById('studentInfoArea').innerHTML = `
+      <div class="student-info">
+        <h3>${student.first_name} ${student.last_name}</h3>
+        <p><strong>Admission No:</strong> ${student.admission_no} | <strong>Class:</strong> ${student.class || '-'} ${student.section ? '('+student.section+')' : ''}</p>
+      </div>`;
+  }
+
+  async function loadStudentDropdown() {
+    try {
+      const res = await fetch(`/api/enrollments?tenant=${tenant}&limit=1000`);
+      if (!res.ok) throw new Error('Failed to load students');
+      let students = await res.json();
+      if (students.data) students = students.data;
+      if (!Array.isArray(students)) students = [];
+
+      const select = document.getElementById('studentSelect');
+      students.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = `${s.admission_no} - ${s.first_name} ${s.last_name}`;
+        select.appendChild(opt);
+      });
+
+      select.addEventListener('change', async function() {
+        const sid = this.value;
+        if (sid) {
+          activeStudentId = sid;
+          const student = students.find(s => s.id === sid);
+          if (student) showStudentInfo(student);
+          loadInvoices(sid);
+        } else {
+          activeStudentId = null;
+          document.getElementById('studentInfoArea').innerHTML = '';
+          document.getElementById('invoicesArea').innerHTML = '';
+          document.getElementById('paymentForm').style.display = 'none';
+        }
+      });
+    } catch(e) {
+      console.error(e);
+    }
+  }
+
+  async function loadInvoices(studentId) {
+    const invoicesArea = document.getElementById('invoicesArea');
+    invoicesArea.innerHTML = '<p>Loading invoices...</p>';
+    try {
+      const invRes = await fetch(`/api/invoices?tenant=${tenant}&student_id=${studentId}`);
+      if (!invRes.ok) {
+        const text = await invRes.text();
+        throw new Error(`Server error (${invRes.status}): ${text.substring(0, 100)}`);
+      }
+      let invoices = await invRes.json();
+      if (!Array.isArray(invoices)) invoices = [];
+
+      renderInvoices(invoices);
+      document.getElementById('paymentForm').style.display = 'block';
+
+      const unpaid = invoices.find(inv => inv.status !== 'Paid');
+      if (unpaid) {
+        document.getElementById('paymentAmount').value = unpaid.total_amount || unpaid.amount || '';
+      } else {
+        document.getElementById('paymentAmount').value = '';
+      }
+    } catch(e) {
+      invoicesArea.innerHTML = `<p class="error-msg">Error: ${e.message}</p>`;
+      document.getElementById('paymentForm').style.display = 'block';
+    }
+  }
+
+  function renderInvoices(invoices) {
+    const area = document.getElementById('invoicesArea');
+    if (!invoices.length) {
+      area.innerHTML = '<p>No invoices found. You can still record a payment.</p>';
+      return;
+    }
+    let html = `<div class="invoice-list"><h3>Existing Invoices</h3><table>
+      <tr><th>Invoice No</th><th>Amount</th><th>Status</th><th>Due Date</th></tr>`;
+    invoices.forEach(inv => {
+      html += `<tr>
+        <td>${inv.invoice_number}</td>
+        <td>K ${inv.total_amount || inv.amount}</td>
+        <td>${inv.status}</td>
+        <td>${inv.due_date || '-'}</td>
+      </tr>`;
+    });
+    html += '</table></div>';
+    area.innerHTML = html;
+  }
+
+  // ---------- Submit Payment ----------
+  document.getElementById('recordPaymentBtn').addEventListener('click', async () => {
+    const studentId = activeStudentId;   // from URL param or dropdown
+    if (!studentId) return alert('Please select a student');
+    const amount = parseFloat(document.getElementById('paymentAmount').value);
+    if (!amount || amount <= 0) return alert('Enter a valid amount');
+    const method = document.getElementById('paymentMethod').value;
+    const remarks = document.getElementById('paymentRemarks').value;
+
+    // Try to link an unpaid invoice (optional)
+    let invoiceId = null;
+    try {
+      const invRes = await fetch(`/api/invoices?tenant=${tenant}&student_id=${studentId}`);
+      if (invRes.ok) {
+        let invoices = await invRes.json();
+        if (!Array.isArray(invoices)) invoices = [];
+        const unpaid = invoices.find(inv => inv.status !== 'Paid');
+        if (unpaid) invoiceId = unpaid.id;
+      }
+    } catch(e) {}
+
+    const body = {
+      student_id: studentId,
+      amount,
+      payment_method: method,
+      remarks,
+      invoice_id: invoiceId
+    };
+
+    try {
+      const res = await fetch(`/api/payments?tenant=${tenant}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Payment failed' }));
+        throw new Error(err.error || 'Payment failed');
+      }
+      const payment = await res.json();
+      alert('Payment recorded! Receipt: ' + (payment.receipt_number || 'N/A'));
+      // Use the exact same redirect function as the Skip button
+      goToProfile();
+    } catch(e) {
+      alert('Payment error: ' + e.message);
+    }
+  });
+
 });
-</script></body></html>
+</script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+async function saveStudent(e) {
+  e.preventDefault();
+  const id = document.getElementById('studentId').value;
+  const studentData = getEnrollmentFormData();
+  if (!id && tenantInfo.type === 'private') {
+    pendingStudentData = studentData;
+    showFeeModal();
+    return;
+  }
+  const student = await submitEnrollment(studentData, id);
+  if (student && !id) {
+    if (tenantInfo.type !== 'private') {
+      window.location.href = `/pages/student.html?tenant=${tenant}&id=${student.id}`;
+    } else {
+      // Private school: go to pay-fees page with the new student
+      window.location.href = `/pages/pay-fees.html?tenant=${tenant}&studentId=${student.id}`;
+    }
+  }
+}
+
+async function submitEnrollment(studentData, id = null, processingFee = null) {
+  if (processingFee) studentData.processingFee = processingFee;
+  const url = id ? `/api/enrollments/${id}?tenant=${tenant}` : `/api/enrollments?tenant=${tenant}`;
+  const method = id ? 'PUT' : 'POST';
+  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(studentData) });
+  if (res.ok) {
+    const newStudent = await res.json();
+    hideStudentModal(); hideFeeModal();
+    pendingStudentData = null;
+    return newStudent;
+  } else {
+    const err = await res.json();
+    alert('Error: ' + (err.error || 'Could not save'));
+    return null;
+  }
+}
+
+function editStudent(id) { const s = students.find(s => s.id === id); if (s) showStudentModal('Edit Student', s); }
+async function deleteStudent(id) { if (!confirm('Delete?')) return; await fetch(`/api/enrollments/${id}?tenant=${tenant}`, { method: 'DELETE' }); loadStudents(); loadDashboardStats(); }
+
+document.getElementById('feeForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fee = { amount: parseFloat(document.getElementById('feeAmount').value), method: document.getElementById('feeMethod').value, paid: document.getElementById('feePaid').checked, date: new Date().toISOString().split('T')[0] };
+  const student = await submitEnrollment(pendingStudentData, document.getElementById('studentId').value, fee);
+  if (student) {
+    // After successful enrollment with fee, also redirect to pay-fees (they might want to pay later, but show the page)
+    window.location.href = `/pages/pay-fees.html?tenant=${tenant}&studentId=${student.id}`;
+  }
+});
+document.getElementById('feeSkipBtn').addEventListener('click', async () => {
+  const student = await submitEnrollment(pendingStudentData, document.getElementById('studentId').value, null);
+  if (student) {
+    window.location.href = `/pages/pay-fees.html?tenant=${tenant}&studentId=${student.id}`;
+  }
+});
+document.getElementById('addStudentBtn').addEventListener('click', () => showStudentModal('Add New Student'));
+document.getElementById('closeModalBtn').addEventListener('click', hideStudentModal);
+document.getElementById('cancelBtn').addEventListener('click', hideStudentModal);
+document.getElementById('enrollmentForm').addEventListener('submit', saveStudent);
+document.getElementById('assessmentCheckbox').addEventListener('change', () => {
+  document.getElementById('assessmentDetails').style.display = document.getElementById('assessmentCheckbox').checked ? 'block' : 'none';
+});
+
+// ========== CLASSES ==========
